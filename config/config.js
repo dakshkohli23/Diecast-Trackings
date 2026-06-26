@@ -1,18 +1,15 @@
-// PreTrack Runtime Config
-// Fallback if GitHub Actions secret injection fails.
-// Protected by Firebase domain restriction on Google Cloud Console.
 window.__PRETRACK_CONFIG__ = {
   firebase: {
-    apiKey:            "__FIREBASE_API_KEY__",
-    authDomain:        "__FIREBASE_AUTH_DOMAIN__",
-    projectId:         "__FIREBASE_PROJECT_ID__",
-    storageBucket:     "__FIREBASE_STORAGE_BUCKET__",
-    messagingSenderId: "__FIREBASE_MESSAGING_SENDER_ID__",
-    appId:             "__FIREBASE_APP_ID__"
+    apiKey:            "AIzaSyA2-6u8rETOIn9xUJQW0ZODFupZQ56orJg",
+    authDomain:        "diecast-tracking-471f7.firebaseapp.com",
+    projectId:         "diecast-tracking-471f7",
+    storageBucket:     "diecast-tracking-471f7.firebasestorage.app",
+    messagingSenderId: "1042711268055",
+    appId:             "1:1042711268055:web:9b09ded970a85532767e92"
   },
-  superAdmin: "__SUPER_ADMIN_EMAIL__",
+  superAdmin: "dlaize@dlaize.com",
   supabase: {
-    url:     "__SUPABASE_URL__",
-    anonKey: "__SUPABASE_ANON_KEY__"
+    url:     "https://ifzioqfkgjkqkirmtgly.supabase.co",
+    anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlmemlvcWZrZ2prcWtpcm10Z2x5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU4MDk4ODMsImV4cCI6MjA5MTM4NTg4M30.3sRDtBjSVcOPjS817TjR6ZP1druW-WW7rxiV1Zb3NCQ"
   }
 };
