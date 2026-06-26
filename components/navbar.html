@@ -1,0 +1,74 @@
+<!-- ═══════════════ TOPBAR ═══════════════ -->
+<header class="topbar">
+  <div class="topbar-left">
+    <button class="sidebar-toggle" id="sidebarToggle">
+      <i class="fa-solid fa-bars"></i>
+    </button>
+    <button class="gs-trigger" id="gsTrigger">
+      <i class="fa-solid fa-magnifying-glass"></i>
+      <span>Search everything...</span>
+      <kbd>/</kbd>
+    </button>
+  </div>
+  <div class="topbar-right" style="position:relative">
+    <button class="btn btn-primary topbar-add-btn" id="topbarAddBtn">
+      <i class="fa-solid fa-plus"></i> <span class="topbar-add-label">Add Order</span>
+    </button>
+    <div class="topbar-profile" id="topbarProfileBtn">
+      <div class="topbar-avatar" id="topbarAvatar">
+        <img id="topbarAvatarImg" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%" />
+        <span id="topbarAvatarInitials"><i class="fa-solid fa-user"></i></span>
+      </div>
+      <div class="profile-info">
+        <span class="profile-name" id="profileName">Admin</span>
+        <span class="profile-role" id="profileRole">User</span>
+      </div>
+      <i class="fa-solid fa-chevron-down" id="topbarChevron" style="font-size:.65rem;color:var(--text-muted);transition:transform .2s"></i>
+    </div>
+
+    <!-- Dropdown -->
+    <div class="topbar-dropdown hidden" id="topbarDropdown">
+      <div class="topbar-dropdown-header">
+        <div class="topbar-dd-avatar" id="topbarDdAvatar">
+          <img id="topbarDdAvatarImg" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%" />
+          <span id="topbarDdInitials"><i class="fa-solid fa-user"></i></span>
+        </div>
+        <div>
+          <div class="topbar-dd-name" id="topbarDdName">Admin</div>
+          <div class="topbar-dd-email" id="topbarDdEmail">—</div>
+        </div>
+      </div>
+      <div class="topbar-dd-divider"></div>
+      <button class="topbar-dd-item" id="ddGoProfile"><i class="fa-solid fa-circle-user"></i> My Profile</button>
+      <button class="topbar-dd-item" id="ddGoSettings"><i class="fa-solid fa-sliders"></i> Settings</button>
+      <div class="topbar-dd-divider"></div>
+      <button class="topbar-dd-item topbar-dd-danger" id="ddLogout"><i class="fa-solid fa-right-from-bracket"></i> Sign Out</button>
+    </div>
+  </div>
+</header>
+
+<!-- Global Search Overlay -->
+<div class="gs-overlay hidden" id="gsOverlay">
+  <div class="gs-modal" id="gsModal">
+    <div class="gs-input-row">
+      <i class="fa-solid fa-magnifying-glass gs-icon"></i>
+      <input type="text" id="gsInput" class="gs-input" placeholder="Search models, brands, sellers..." autocomplete="off" spellcheck="false" />
+      <kbd class="gs-esc">Esc</kbd>
+    </div>
+    <div class="gs-body" id="gsBody">
+      <div class="gs-empty">
+        <i class="fa-solid fa-magnifying-glass"></i>
+        <span>Type to search your collection</span>
+      </div>
+    </div>
+    <div class="gs-footer">
+      <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+      <span><kbd>↵</kbd> open</span>
+      <span><kbd>Esc</kbd> close</span>
+      <span><kbd>/</kbd> open anywhere</span>
+    </div>
+  </div>
+</div>
+
+<!-- Toast container -->
+<div class="toast-container" id="toastContainer"></div>

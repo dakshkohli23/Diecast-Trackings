@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PreTrack — Dashboard</title>
+  <link rel="manifest" href="../../pwa/manifest.json" />
+  <meta name="theme-color" content="#7c5cfc" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="PreTrack" />
+  <link rel="stylesheet" href="../../assets/css/global.css" />
+  <link rel="stylesheet" href="../../assets/css/dashboard.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@400;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+</head>
+<body class="dashboard-body" data-page="dashboard">
+
+  <!-- Sidebar injected by JS -->
+  <div id="sidebar-root"></div>
+
+  <div class="main-wrap" id="mainWrap">
+    <!-- Topbar injected by JS -->
+    <div id="topbar-root"></div>
+
+    <main class="page-content" id="pageContent">
+      <section class="section active" id="section-dashboard">
+
+        <!-- HERO GREETING BAR -->
+        <div class="dash-hero" id="greetingBar">
+          <div class="dash-hero-left">
+            <div class="dash-hero-avatar" id="dashHeroAvatar">
+              <img id="dashHeroAvatarImg" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%" />
+              <span id="dashHeroAvatarIni"></span>
+            </div>
+            <div>
+              <div class="dash-hero-greeting" id="greetingText">—</div>
+              <div class="dash-hero-meta">
+                <span id="greetingDate"></span>
+                <span class="dash-hero-dot">·</span>
+                <span class="system-status" id="systemStatus"><span class="status-dot"></span> Checking...</span>
+              </div>
+            </div>
+          </div>
+          <div class="dash-hero-right">
+            <div class="dash-hero-stat"><span class="dhs-val" id="dhStatModels">—</span><span class="dhs-label">Models</span></div>
+            <div class="dash-hero-divider"></div>
+            <div class="dash-hero-stat"><span class="dhs-val" id="dhStatDue">—</span><span class="dhs-label">Due</span></div>
+            <div class="dash-hero-divider"></div>
+            <div class="dash-hero-stat"><span class="dhs-val" id="dhStatEta">—</span><span class="dhs-label">This Week</span></div>
+          </div>
+        </div>
+
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Dashboard</h2>
+            <p class="section-sub">Welcome back! Here's your overview.</p>
+          </div>
+          <a href="add-order.html" class="btn btn-primary"><i class="fa-solid fa-plus"></i> <span>Add Order</span></a>
+        </div>
+
+        <!-- STATS GRID -->
+        <div class="stats-grid" id="statsGrid">
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon indigo"><i class="fa-solid fa-hashtag"></i></div><span class="stat-badge s-indigo">Catalog</span></div>
+            <div class="stat-label">Total Orders</div>
+            <div class="stat-value" id="statTotal">0</div>
+            <div class="stat-footer"><i class="fa-solid fa-layer-group s-indigo"></i><span class="s-indigo">All tracked</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-indigo" style="width:100%"></div></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon green"><i class="fa-solid fa-boxes-stacked"></i></div><span class="stat-badge s-green">Inventory</span></div>
+            <div class="stat-label">Total Quantity</div>
+            <div class="stat-value" id="statQty">0</div>
+            <div class="stat-footer"><i class="fa-solid fa-check-circle s-green"></i><span class="s-green">Units ordered</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-green" style="width:80%"></div></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon purple"><i class="fa-solid fa-indian-rupee-sign"></i></div><span class="stat-badge s-purple">Finance</span></div>
+            <div class="stat-label">Total Investment</div>
+            <div class="stat-value" id="statInvestment">₹0</div>
+            <div class="stat-footer"><i class="fa-solid fa-wallet s-purple"></i><span class="s-purple">Actual spend</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-purple" style="width:75%"></div></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon pink"><i class="fa-solid fa-file-invoice-dollar"></i></div><span class="stat-badge s-pink">Dues</span></div>
+            <div class="stat-label">Pending Payments</div>
+            <div class="stat-value" id="statPending">₹0</div>
+            <div class="stat-footer"><i class="fa-solid fa-circle-exclamation s-pink"></i><span class="s-pink">Amount due</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-pink" id="statPendingBar" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon orange"><i class="fa-solid fa-list-check"></i></div><span class="stat-badge s-orange">Pipeline</span></div>
+            <div class="stat-label">Pending PO</div>
+            <div class="stat-value" id="statPendingPO">0</div>
+            <div class="stat-footer"><i class="fa-solid fa-hourglass s-orange"></i><span class="s-orange">Upcoming arrivals</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-orange" id="statPendingPOBar" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon green"><i class="fa-solid fa-circle-check"></i></div><span class="stat-badge s-green">Done</span></div>
+            <div class="stat-label">Delivered</div>
+            <div class="stat-value" id="statDelivered">0</div>
+            <div class="stat-footer"><i class="fa-solid fa-box-open s-green"></i><span class="s-green">In collection</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-green" id="statDeliveredBar" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon teal"><i class="fa-solid fa-truck-moving"></i></div><span class="stat-badge s-teal">Moving</span></div>
+            <div class="stat-label">In Transit</div>
+            <div class="stat-value" id="statTransit">0</div>
+            <div class="stat-footer"><i class="fa-solid fa-location-dot s-teal"></i><span class="s-teal">Shipment pipeline</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-teal" id="statTransitBar" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon red"><i class="fa-solid fa-calendar-xmark"></i></div><span class="stat-badge s-red">Alert</span></div>
+            <div class="stat-label">Overdue</div>
+            <div class="stat-value" id="statOverdue">0</div>
+            <div class="stat-footer"><i class="fa-solid fa-clock-rotate-left s-red"></i><span class="s-red">Past ETA</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-red" id="statOverdueBar" style="width:0%"></div></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon indigo"><i class="fa-solid fa-crown"></i></div><span class="stat-badge s-indigo">Top Brand</span></div>
+            <div class="stat-label">Most Ordered</div>
+            <div class="stat-value stat-value-sm" id="statTopBrand">—</div>
+            <div class="stat-footer"><i class="fa-solid fa-ranking-star s-indigo"></i><span class="s-indigo">By quantity</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-indigo" style="width:80%"></div></div>
+          </div>
+          <div class="stat-card glass">
+            <div class="stat-card-top"><div class="stat-icon teal"><i class="fa-solid fa-indian-rupee-sign"></i></div><span class="stat-badge s-teal">Avg Cost</span></div>
+            <div class="stat-label">Avg Buy Price</div>
+            <div class="stat-value" id="statAvgBuy">₹0</div>
+            <div class="stat-footer"><i class="fa-solid fa-calculator s-teal"></i><span class="s-teal">Per unit avg</span></div>
+            <div class="stat-bar"><div class="stat-bar-fill s-teal" style="width:65%"></div></div>
+          </div>
+        </div>
+
+        <!-- COLLECTION INSIGHTS -->
+        <div id="weekArrivalsWrap">
+          <div class="insight-strip-wrap glass">
+            <div class="insight-strip-header">
+              <span class="insight-strip-title"><i class="fa-solid fa-lightbulb"></i> Collection Insights</span>
+              <span class="insight-strip-sub" id="insightSub">Analysing your collection...</span>
+            </div>
+            <div class="insight-strip-scroll" id="insightScroll"></div>
+          </div>
+        </div>
+
+        <!-- WIDGETS ROW -->
+        <div class="widgets-grid">
+          <div class="widget glass" id="recentOrdersWidget">
+            <div class="widget-header">
+              <h3><i class="fa-solid fa-clock-rotate-left"></i> Recent Orders</h3>
+              <a href="collection.html" class="widget-link">View All</a>
+            </div>
+            <div class="widget-body" id="recentOrdersList"><div class="empty-state">No orders yet</div></div>
+          </div>
+
+          <div class="widget glass" id="quickActionsWidget">
+            <div class="widget-header"><h3><i class="fa-solid fa-bolt"></i> Quick Actions</h3></div>
+            <div class="quick-actions">
+              <a href="add-order.html"  class="qa-btn"><i class="fa-solid fa-plus"></i><span>Add Order</span></a>
+              <button class="qa-btn" id="qaExport"><i class="fa-solid fa-download"></i><span>Export CSV</span></button>
+              <a href="analytics.html"  class="qa-btn"><i class="fa-solid fa-chart-bar"></i><span>Analytics</span></a>
+              <a href="upcoming.html"   class="qa-btn"><i class="fa-solid fa-triangle-exclamation"></i><span>Delayed</span></a>
+            </div>
+            <div class="alerts-panel" id="alertsPanel"></div>
+          </div>
+
+          <div class="widget glass" id="etaWidget">
+            <div class="widget-header"><h3><i class="fa-solid fa-truck-fast"></i> Upcoming Deliveries</h3></div>
+            <div class="widget-body" id="etaList"><div class="empty-state">No upcoming orders</div></div>
+          </div>
+        </div>
+
+        <!-- ACTIVITY + LEADERBOARD -->
+        <div class="activity-row">
+          <div class="widget glass" id="activityFeed">
+            <div class="widget-header"><h3><i class="fa-solid fa-wave-square"></i> Activity Feed</h3></div>
+            <div class="activity-list" id="activityList"><div class="empty-state">No recent activity</div></div>
+          </div>
+          <div class="widget glass" id="brandLeaderboard">
+            <div class="widget-header"><h3><i class="fa-solid fa-trophy"></i> Brand Leaderboard</h3></div>
+            <div class="leaderboard-list" id="leaderboardList"><div class="empty-state">No data yet</div></div>
+          </div>
+        </div>
+
+      </section>
+    </main>
+  </div>
+
+  <script src="../../config/config.js"></script>
+  <script type="module" src="../../assets/js/pages/dashboard.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/Diecast-Trackings/pwa/sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

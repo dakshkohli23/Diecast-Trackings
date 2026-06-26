@@ -1,0 +1,27 @@
+{
+  "name": "PreTrack — Diecast Manager",
+  "short_name": "PreTrack",
+  "description": "Personal diecast model car collection tracker",
+  "start_url": "../../login.html",
+  "scope": "/Diecast-Trackings/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#0f0c1e",
+  "theme_color": "#7c5cfc",
+  "icons": [
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/svg?seed=pretrack&backgroundColor=7c5cfc&size=192",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://api.dicebear.com/7.x/shapes/svg?seed=pretrack&backgroundColor=7c5cfc&size=512",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["productivity", "utilities"],
+  "lang": "en-IN"
+}

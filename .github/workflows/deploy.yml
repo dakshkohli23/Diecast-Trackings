@@ -1,0 +1,93 @@
+name: Deploy PreTrack to GitHub Pages
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Inject secrets into config files
+        run: |
+          python3 << 'PYEOF'
+          import os, glob
+
+          replacements = {
+            '__FIREBASE_API_KEY__':             os.environ['FIREBASE_API_KEY'],
+            '__FIREBASE_AUTH_DOMAIN__':         os.environ['FIREBASE_AUTH_DOMAIN'],
+            '__FIREBASE_PROJECT_ID__':          os.environ['FIREBASE_PROJECT_ID'],
+            '__FIREBASE_STORAGE_BUCKET__':      os.environ['FIREBASE_STORAGE_BUCKET'],
+            '__FIREBASE_MESSAGING_SENDER_ID__': os.environ['FIREBASE_MESSAGING_SENDER_ID'],
+            '__FIREBASE_APP_ID__':              os.environ['FIREBASE_APP_ID'],
+            '__SUPER_ADMIN_EMAIL__':            os.environ['SUPER_ADMIN_EMAIL'],
+            '__SUPABASE_URL__':                 os.environ['SUPABASE_URL'],
+            '__SUPABASE_ANON_KEY__':            os.environ['SUPABASE_ANON_KEY'],
+          }
+
+          # Files to inject into
+          targets = [
+            'config/config.js',
+            'assets/js/services/firebase.js',
+            'login.html',
+          ]
+
+          for filename in targets:
+            try:
+              with open(filename, 'r') as f:
+                content = f.read()
+              for placeholder, value in replacements.items():
+                content = content.replace(placeholder, value)
+              with open(filename, 'w') as f:
+                f.write(content)
+              print(f'✓ Injected: {filename}')
+            except FileNotFoundError:
+              print(f'⚠ Not found: {filename}')
+          PYEOF
+        env:
+          FIREBASE_API_KEY:             ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_AUTH_DOMAIN:         ${{ secrets.FIREBASE_AUTH_DOMAIN }}
+          FIREBASE_PROJECT_ID:          ${{ secrets.FIREBASE_PROJECT_ID }}
+          FIREBASE_STORAGE_BUCKET:      ${{ secrets.FIREBASE_STORAGE_BUCKET }}
+          FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.FIREBASE_MESSAGING_SENDER_ID }}
+          FIREBASE_APP_ID:              ${{ secrets.FIREBASE_APP_ID }}
+          SUPER_ADMIN_EMAIL:            ${{ secrets.SUPER_ADMIN_EMAIL }}
+          SUPABASE_URL:                 ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY:            ${{ secrets.SUPABASE_ANON_KEY }}
+
+      - name: Verify injection
+        run: |
+          if grep -q "__FIREBASE_API_KEY__" config/config.js; then
+            echo "FAILED: placeholder still in config/config.js"
+            exit 1
+          fi
+          echo "✓ Secrets injected successfully"
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

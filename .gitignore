@@ -1,0 +1,15 @@
+# Credentials - never commit real keys
+config/config.js
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Node (if build tools ever added)
+node_modules/
+dist/

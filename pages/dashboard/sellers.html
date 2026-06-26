@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PreTrack — Sellers</title>
+  <link rel="manifest" href="../../pwa/manifest.json" />
+  <meta name="theme-color" content="#7c5cfc" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="PreTrack" />
+  <link rel="stylesheet" href="../../assets/css/global.css" />
+  <link rel="stylesheet" href="../../assets/css/dashboard.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@400;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+</head>
+<body class="dashboard-body" data-page="sellers">
+
+  <!-- Sidebar injected by JS -->
+  <div id="sidebar-root"></div>
+
+  <div class="main-wrap" id="mainWrap">
+    <!-- Topbar injected by JS -->
+    <div id="topbar-root"></div>
+
+    <main class="page-content" id="pageContent">
+      <!-- Section content -->
+      <section class="section active" id="section-sellers">
+        <!-- Populated by sellers.js -->
+        <div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>
+      </section>
+    </main>
+  </div>
+
+  <script src="../../config/config.js"></script>
+  <script type="module" src="../../assets/js/pages/sellers.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/Diecast-Trackings/pwa/sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PreTrack — Sign In</title>
+  <link rel="manifest" href="pwa/manifest.json" />
+  <meta name="theme-color" content="#7c5cfc" />
+  <link rel="stylesheet" href="assets/css/login.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;1,400&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+</head>
+<body>
+
+  <!-- ════ LEFT HERO PANEL ════ -->
+  <div class="hero">
+    <div class="hero-rings">
+      <div class="ring ring-1"></div>
+      <div class="ring ring-2"></div>
+      <div class="ring ring-3"></div>
+    </div>
+    <i class="fa-solid fa-car-side   deco-float"></i>
+    <i class="fa-solid fa-car-rear   deco-float"></i>
+    <i class="fa-solid fa-truck      deco-float"></i>
+
+    <div class="hero-top">
+      <div class="hero-logo-box"><i class="fa-solid fa-car-side"></i></div>
+      <div>
+        <div class="hero-logo-name">PreTrack</div>
+        <span class="hero-logo-sub">Pegasus · v4.1</span>
+      </div>
+    </div>
+
+    <div class="hero-body">
+      <div class="hero-live">
+        <span class="live-dot"></span>
+        Diecast Collection Manager
+      </div>
+      <h1 class="hero-title">
+        Track every <em>preorder,</em><br/>
+        own every detail.
+      </h1>
+      <p class="hero-desc">
+        The complete toolkit for serious diecast collectors — monitor orders, track payments and analyse your collection in one beautifully designed dashboard.
+      </p>
+      <div class="feature-list">
+        <div class="feature-row">
+          <div class="feature-icon"><i class="fa-solid fa-box-open"></i></div>
+          Smart order tracking with ETA alerts
+        </div>
+        <div class="feature-row">
+          <div class="feature-icon"><i class="fa-solid fa-wallet"></i></div>
+          Payment tracking — per-piece precision
+        </div>
+        <div class="feature-row">
+          <div class="feature-icon"><i class="fa-solid fa-chart-area"></i></div>
+          Brand analytics &amp; monthly spend insights
+        </div>
+        <div class="feature-row">
+          <div class="feature-icon"><i class="fa-solid fa-cloud"></i></div>
+          Live Firebase sync across all devices
+        </div>
+      </div>
+    </div>
+
+    <div class="hero-footer">
+      <a href="#">Privacy</a>
+      <a href="#">Terms</a>
+      <span>© 2025 PreTrack</span>
+    </div>
+  </div>
+
+  <!-- ════ RIGHT FORM PANEL ════ -->
+  <div class="form-panel">
+    <div class="form-wrap">
+      <div class="form-header">
+        <div class="form-eyebrow">
+          <div class="form-eyebrow-line"></div>
+          Secure Access
+        </div>
+        <h2 class="form-title">Welcome back</h2>
+        <p class="form-subtitle">Sign in to your PreTrack account to manage your diecast collection.</p>
+      </div>
+
+      <form id="loginForm" onsubmit="return false;">
+        <div class="field">
+          <div class="field-label"><i class="fa-solid fa-envelope"></i> Email Address</div>
+          <div class="field-wrap">
+            <input type="email" id="username" class="field-input" placeholder="your@email.com" autocomplete="email" required />
+          </div>
+        </div>
+        <div class="field">
+          <div class="field-label"><i class="fa-solid fa-lock"></i> Password</div>
+          <div class="field-wrap">
+            <input type="password" id="password" class="field-input has-toggle" placeholder="Enter your password" autocomplete="current-password" required />
+            <button type="button" class="pw-toggle" id="togglePw"><i class="fa-solid fa-eye"></i></button>
+          </div>
+        </div>
+        <button type="submit" class="btn-signin" id="loginBtn">
+          <i class="fa-solid fa-right-to-bracket"></i>
+          <span>Sign In to Dashboard</span>
+        </button>
+        <div class="form-error hidden" id="loginError">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          <span id="errorMsg">Invalid email or password.</span>
+        </div>
+      </form>
+
+      <div class="form-divider">or</div>
+      <button class="btn-request-access" id="openModal">
+        <i class="fa-solid fa-paper-plane"></i>
+        Request Access from Admin
+      </button>
+      <div class="form-footnote">PreTrack Pegasus <span>·</span> Powered by Firebase</div>
+    </div>
+  </div>
+
+  <!-- ════ REQUEST ACCESS MODAL ════ -->
+  <div class="modal-overlay hidden" id="reqModal">
+    <div class="modal">
+      <div class="modal-top-bar"></div>
+      <div class="modal-body">
+        <div id="modalFormState">
+          <div class="modal-header">
+            <div class="modal-title-wrap">
+              <div class="modal-eyebrow"><span class="modal-eyebrow-dot"></span>Get Access</div>
+              <div class="modal-title">Request Access</div>
+              <p class="modal-subtitle">Fill in your details and the admin will be notified to approve your account.</p>
+            </div>
+            <button class="modal-close" id="closeModal"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <form id="accessForm" onsubmit="return false;">
+            <div class="modal-field">
+              <label><i class="fa-solid fa-user"></i> Full Name</label>
+              <input type="text" id="aName" placeholder="Your full name" required />
+            </div>
+            <div class="modal-field">
+              <label><i class="fa-solid fa-envelope"></i> Email Address</label>
+              <input type="email" id="aEmail" placeholder="you@example.com" required />
+            </div>
+            <div class="modal-field">
+              <label><i class="fa-solid fa-comment-dots"></i> Reason <span style="font-weight:400;text-transform:none;letter-spacing:0;font-size:0.65rem;color:var(--ink-dim)"> — optional</span></label>
+              <textarea id="aReason" placeholder="Briefly tell us why you need access…" rows="3"></textarea>
+            </div>
+            <div class="modal-alert error hidden" id="reqError">
+              <i class="fa-solid fa-circle-xmark"></i>
+              <span id="reqErrorMsg">Failed to send. Please try again.</span>
+            </div>
+            <div class="modal-actions">
+              <button type="button" class="btn-modal-cancel" id="closeModal2">Cancel</button>
+              <button type="submit" class="btn-modal-submit" id="reqBtn">
+                <i class="fa-solid fa-paper-plane"></i> Send Request
+              </button>
+            </div>
+          </form>
+        </div>
+        <div id="modalSuccessState" class="modal-success hidden">
+          <div class="success-circle"><i class="fa-solid fa-check"></i></div>
+          <div class="success-title">Request Sent!</div>
+          <p class="success-sub">Your access request has been saved. The admin will review it shortly.</p>
+          <button class="btn-success-close" id="closeSuccess">Close</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="config/config.js"></script>
+  <script type="module" src="assets/js/auth/login.js"></script>
+
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/Diecast-Trackings/pwa/sw.js')
+          .then(r => console.log('SW registered:', r.scope))
+          .catch(e => console.warn('SW failed:', e));
+      });
+    }
+  </script>
+</body>
+</html>

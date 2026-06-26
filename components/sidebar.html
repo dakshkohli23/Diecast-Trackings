@@ -1,0 +1,58 @@
+<!-- ═══════════════ SIDEBAR ═══════════════ -->
+<!-- PreTrack Sidebar Component
+     Include in dashboard pages with:
+     <script>
+       fetch('../../components/sidebar.html').then(r=>r.text()).then(html => {
+         document.getElementById('sidebar-placeholder').innerHTML = html;
+         initSidebar();
+       });
+     </script>
+     OR use components/sidebar.js for auto-injection.
+-->
+<aside class="sidebar" id="sidebar">
+  <div class="sidebar-brand">
+    <div class="brand-icon"><i class="fa-solid fa-car-side"></i></div>
+    <div class="brand-text-wrap">
+      <span class="brand-text">PreTrack</span>
+      <span class="brand-sub">Diecast Preorder Manager</span>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-group-label">MAIN</div>
+    <a href="index.html"    class="nav-item" data-page="dashboard"  data-tooltip="Dashboard"><i class="fa-solid fa-gauge-high"></i><span>Dashboard</span></a>
+    <a href="collection.html" class="nav-item" data-page="collection" data-tooltip="Collection"><i class="fa-solid fa-car-side"></i><span>Collection</span></a>
+    <a href="catalog.html"  class="nav-item" data-page="catalog"    data-tooltip="Catalog"><i class="fa-solid fa-shop"></i><span>Catalog</span></a>
+    <a href="brands.html"   class="nav-item" data-page="brands"     data-tooltip="Brands"><i class="fa-solid fa-building"></i><span>Brands</span></a>
+    <a href="sellers.html"  class="nav-item" data-page="sellers"    data-tooltip="Sellers"><i class="fa-solid fa-store"></i><span>Sellers</span></a>
+    <a href="add-order.html" class="nav-item" data-page="add-order"  data-tooltip="Add Order"><i class="fa-solid fa-circle-plus"></i><span>Add Order</span></a>
+    <a href="calendar.html" class="nav-item" data-page="calendar"   data-tooltip="ETA Calendar"><i class="fa-solid fa-calendar-days"></i><span>Calendar</span></a>
+    <a href="upcoming.html" class="nav-item" data-page="upcoming"   data-tooltip="Upcoming Deliveries">
+      <i class="fa-solid fa-truck-fast"></i><span>Upcoming</span>
+      <span class="nav-badge" id="upcomingBadge" style="display:none"></span>
+    </a>
+
+    <div class="nav-group-label">REPORTS</div>
+    <a href="analytics.html" class="nav-item" data-page="analytics" data-tooltip="Analytics"><i class="fa-solid fa-chart-area"></i><span>Analytics</span></a>
+
+    <div class="nav-group-label">SYSTEM</div>
+    <a href="payments.html" class="nav-item" data-page="payments" data-tooltip="Payments"><i class="fa-solid fa-wallet"></i><span>Payments</span></a>
+    <a href="users.html"    class="nav-item admin-only" data-page="users"    data-tooltip="Users"><i class="fa-solid fa-users-gear"></i><span>Users</span></a>
+    <a href="access-requests.html" class="nav-item admin-only" data-page="access-requests" data-tooltip="Access Requests" style="display:none">
+      <i class="fa-solid fa-user-clock"></i>
+      <span>Access Requests</span>
+      <span class="nav-badge" id="accessRequestsBadge" style="display:none"></span>
+    </a>
+    <a href="settings.html" class="nav-item" data-page="settings" data-tooltip="Settings"><i class="fa-solid fa-sliders"></i><span>Settings</span></a>
+    <a href="profile.html"  class="nav-item" data-page="profile"  data-tooltip="Profile"><i class="fa-solid fa-circle-user"></i><span>Profile</span></a>
+  </nav>
+
+  <div class="sidebar-footer">
+    <button class="nav-item logout-btn" id="logoutBtn" data-tooltip="Logout">
+      <i class="fa-solid fa-right-from-bracket"></i>
+      <span>Logout</span>
+    </button>
+  </div>
+</aside>
+
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
