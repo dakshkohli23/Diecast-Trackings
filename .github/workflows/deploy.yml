@@ -26,30 +26,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Inject secrets into config/config.js
-        run: |
-          python3 << 'PYEOF'
-          import os
-
-          replacements = {
-            '__FIREBASE_API_KEY__':             os.environ['FIREBASE_API_KEY'],
-            '__FIREBASE_AUTH_DOMAIN__':         os.environ['FIREBASE_AUTH_DOMAIN'],
-            '__FIREBASE_PROJECT_ID__':          os.environ['FIREBASE_PROJECT_ID'],
-            '__FIREBASE_STORAGE_BUCKET__':      os.environ['FIREBASE_STORAGE_BUCKET'],
-            '__FIREBASE_MESSAGING_SENDER_ID__': os.environ['FIREBASE_MESSAGING_SENDER_ID'],
-            '__FIREBASE_APP_ID__':              os.environ['FIREBASE_APP_ID'],
-            '__SUPER_ADMIN_EMAIL__':            os.environ['SUPER_ADMIN_EMAIL'],
-            '__SUPABASE_URL__':                 os.environ['SUPABASE_URL'],
-            '__SUPABASE_ANON_KEY__':            os.environ['SUPABASE_ANON_KEY'],
-          }
-
-          with open('config/config.js', 'r') as f:
-            content = f.read()
-          for placeholder, value in replacements.items():
-            content = content.replace(placeholder, value)
-          with open('config/config.js', 'w') as f:
-            f.write(content)
-          print('✓ Secrets injected into config/config.js')
-          PYEOF
         env:
           FIREBASE_API_KEY:             ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_AUTH_DOMAIN:         ${{ secrets.FIREBASE_AUTH_DOMAIN }}
@@ -60,14 +36,26 @@ jobs:
           SUPER_ADMIN_EMAIL:            ${{ secrets.SUPER_ADMIN_EMAIL }}
           SUPABASE_URL:                 ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY:            ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          sed -i "s|__FIREBASE_API_KEY__|${FIREBASE_API_KEY}|g"                         config/config.js
+          sed -i "s|__FIREBASE_AUTH_DOMAIN__|${FIREBASE_AUTH_DOMAIN}|g"                 config/config.js
+          sed -i "s|__FIREBASE_PROJECT_ID__|${FIREBASE_PROJECT_ID}|g"                   config/config.js
+          sed -i "s|__FIREBASE_STORAGE_BUCKET__|${FIREBASE_STORAGE_BUCKET}|g"           config/config.js
+          sed -i "s|__FIREBASE_MESSAGING_SENDER_ID__|${FIREBASE_MESSAGING_SENDER_ID}|g" config/config.js
+          sed -i "s|__FIREBASE_APP_ID__|${FIREBASE_APP_ID}|g"                           config/config.js
+          sed -i "s|__SUPER_ADMIN_EMAIL__|${SUPER_ADMIN_EMAIL}|g"                       config/config.js
+          sed -i "s|__SUPABASE_URL__|${SUPABASE_URL}|g"                                 config/config.js
+          sed -i "s|__SUPABASE_ANON_KEY__|${SUPABASE_ANON_KEY}|g"                       config/config.js
+          echo "✓ Secrets injected"
 
       - name: Verify injection
         run: |
           if grep -q "__FIREBASE_API_KEY__" config/config.js; then
-            echo "FAILED: placeholder still in config/config.js — check GitHub Secrets are set"
+            echo "FAILED: __FIREBASE_API_KEY__ still present — check GitHub Secrets are set"
             exit 1
           fi
-          echo "✓ All secrets injected successfully"
+          echo "✓ config/config.js injected successfully"
+          grep "apiKey" config/config.js
 
       - name: Setup Pages
         uses: actions/configure-pages@v4
