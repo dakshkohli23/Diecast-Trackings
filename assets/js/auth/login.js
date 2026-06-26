@@ -14,7 +14,7 @@ setPersistence(auth, browserLocalPersistence).catch(() => {});
 
 // Auto-redirect if already signed in
 onAuthStateChanged(auth, user => {
-  if (user) window.location.href = '../../pages/dashboard/index.html';
+  if (user) window.location.href = 'pages/dashboard/index.html';
 });
 
 // Password visibility toggle
@@ -57,7 +57,7 @@ document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
     // Super admin — always allow
     if (email.toLowerCase() === SUPER_ADMIN.toLowerCase() || SUPER_ADMIN.includes('__')) {
       btn.innerHTML = '<i class="fa-solid fa-circle-check"></i> <span>Redirecting…</span>';
-      window.location.href = '../../pages/dashboard/index.html';
+      window.location.href = 'pages/dashboard/index.html';
       return;
     }
 
@@ -72,7 +72,7 @@ document.getElementById('loginForm')?.addEventListener('submit', async (e) => {
     } catch (dbErr) { console.warn('DB check:', dbErr.message); }
 
     btn.innerHTML = '<i class="fa-solid fa-circle-check"></i> <span>Redirecting…</span>';
-    window.location.href = '../../pages/dashboard/index.html';
+    window.location.href = 'pages/dashboard/index.html';
 
   } catch (e) {
     let m = 'Invalid email or password. Please try again.';
