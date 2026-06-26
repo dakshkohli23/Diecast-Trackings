@@ -25,10 +25,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Inject secrets into config files
+      - name: Inject secrets into config/config.js
         run: |
           python3 << 'PYEOF'
-          import os, glob
+          import os
 
           replacements = {
             '__FIREBASE_API_KEY__':             os.environ['FIREBASE_API_KEY'],
@@ -42,24 +42,13 @@ jobs:
             '__SUPABASE_ANON_KEY__':            os.environ['SUPABASE_ANON_KEY'],
           }
 
-          # Files to inject into
-          targets = [
-            'config/config.js',
-            'assets/js/services/firebase.js',
-            'login.html',
-          ]
-
-          for filename in targets:
-            try:
-              with open(filename, 'r') as f:
-                content = f.read()
-              for placeholder, value in replacements.items():
-                content = content.replace(placeholder, value)
-              with open(filename, 'w') as f:
-                f.write(content)
-              print(f'✓ Injected: {filename}')
-            except FileNotFoundError:
-              print(f'⚠ Not found: {filename}')
+          with open('config/config.js', 'r') as f:
+            content = f.read()
+          for placeholder, value in replacements.items():
+            content = content.replace(placeholder, value)
+          with open('config/config.js', 'w') as f:
+            f.write(content)
+          print('✓ Secrets injected into config/config.js')
           PYEOF
         env:
           FIREBASE_API_KEY:             ${{ secrets.FIREBASE_API_KEY }}
@@ -75,10 +64,10 @@ jobs:
       - name: Verify injection
         run: |
           if grep -q "__FIREBASE_API_KEY__" config/config.js; then
-            echo "FAILED: placeholder still in config/config.js"
+            echo "FAILED: placeholder still in config/config.js — check GitHub Secrets are set"
             exit 1
           fi
-          echo "✓ Secrets injected successfully"
+          echo "✓ All secrets injected successfully"
 
       - name: Setup Pages
         uses: actions/configure-pages@v4

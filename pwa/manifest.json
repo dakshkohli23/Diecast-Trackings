@@ -2,7 +2,7 @@
   "name": "PreTrack — Diecast Manager",
   "short_name": "PreTrack",
   "description": "Personal diecast model car collection tracker",
-  "start_url": "../../login.html",
+  "start_url": "/Diecast-Trackings/login.html",
   "scope": "/Diecast-Trackings/",
   "display": "standalone",
   "orientation": "portrait-primary",
