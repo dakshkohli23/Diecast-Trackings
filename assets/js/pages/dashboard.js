@@ -14,21 +14,11 @@ import {
 } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
 
 // ── Inject sidebar & topbar HTML ──
-async function injectComponents() {
-  const [sidebarHtml, topbarHtml] = await Promise.all([
-    fetch('../../components/sidebar.html').then(r => r.text()),
-    fetch('../../components/navbar.html').then(r => r.text()),
-  ]);
-  document.getElementById('sidebar-root').innerHTML = sidebarHtml;
-  document.getElementById('topbar-root').innerHTML  = topbarHtml;
-}
-
 // ── App State ──
 let DB = { orders: [], activity: [] };
 
 // ── Boot ──
 (async () => {
-  await injectComponents();
   const { user, role, isSuperAdmin } = await requireAuth();
 
   initSidebar();

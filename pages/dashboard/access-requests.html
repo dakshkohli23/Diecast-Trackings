@@ -19,12 +19,107 @@
 </head>
 <body class="dashboard-body" data-page="access-requests">
 
-  <!-- Sidebar injected by JS -->
-  <div id="sidebar-root"></div>
+  <!-- ═══════════════ SIDEBAR ═══════════════ -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <div class="brand-icon"><i class="fa-solid fa-car-side"></i></div>
+      <div class="brand-text-wrap">
+        <span class="brand-text">PreTrack</span>
+        <span class="brand-sub">Diecast Preorder Manager</span>
+      </div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-group-label">MAIN</div>
+      <a href="index.html" class="nav-item" data-page="dashboard" data-tooltip="Dashboard"><i class="fa-solid fa-gauge-high"></i><span>Dashboard</span></a>
+      <a href="collection.html" class="nav-item" data-page="collection" data-tooltip="Collection"><i class="fa-solid fa-car-side"></i><span>Collection</span></a>
+      <a href="catalog.html" class="nav-item" data-page="catalog" data-tooltip="Catalog"><i class="fa-solid fa-shop"></i><span>Catalog</span></a>
+      <a href="brands.html" class="nav-item" data-page="brands" data-tooltip="Brands"><i class="fa-solid fa-building"></i><span>Brands</span></a>
+      <a href="sellers.html" class="nav-item" data-page="sellers" data-tooltip="Sellers"><i class="fa-solid fa-store"></i><span>Sellers</span></a>
+      <a href="add-order.html" class="nav-item" data-page="add-order" data-tooltip="Add Order"><i class="fa-solid fa-circle-plus"></i><span>Add Order</span></a>
+      <a href="calendar.html" class="nav-item" data-page="calendar" data-tooltip="ETA Calendar"><i class="fa-solid fa-calendar-days"></i><span>Calendar</span></a>
+      <a href="upcoming.html" class="nav-item" data-page="upcoming" data-tooltip="Upcoming Deliveries"><i class="fa-solid fa-truck-fast"></i><span>Upcoming</span><span class="nav-badge" id="upcomingBadge" style="display:none"></span></a>
+      <div class="nav-group-label">REPORTS</div>
+      <a href="analytics.html" class="nav-item" data-page="analytics" data-tooltip="Analytics"><i class="fa-solid fa-chart-area"></i><span>Analytics</span></a>
+      <div class="nav-group-label">SYSTEM</div>
+      <a href="payments.html" class="nav-item" data-page="payments" data-tooltip="Payments"><i class="fa-solid fa-wallet"></i><span>Payments</span></a>
+      <a href="users.html" class="nav-item admin-only" data-page="users" data-tooltip="Users"><i class="fa-solid fa-users-gear"></i><span>Users</span></a>
+      <a href="access-requests.html" class="nav-item admin-only" data-page="access-requests" data-tooltip="Access Requests" style="display:none"><i class="fa-solid fa-user-clock"></i><span>Access Requests</span><span class="nav-badge" id="accessRequestsBadge" style="display:none"></span></a>
+      <a href="settings.html" class="nav-item" data-page="settings" data-tooltip="Settings"><i class="fa-solid fa-sliders"></i><span>Settings</span></a>
+      <a href="profile.html" class="nav-item" data-page="profile" data-tooltip="Profile"><i class="fa-solid fa-circle-user"></i><span>Profile</span></a>
+    </nav>
+    <div class="sidebar-footer">
+      <button class="nav-item logout-btn" id="logoutBtn" data-tooltip="Logout">
+        <i class="fa-solid fa-right-from-bracket"></i><span>Logout</span>
+      </button>
+    </div>
+  </aside>
 
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <!-- ═══════════════ MAIN CONTENT ═══════════════ -->
   <div class="main-wrap" id="mainWrap">
-    <!-- Topbar injected by JS -->
-    <div id="topbar-root"></div>
+
+    <!-- TOPBAR -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="sidebar-toggle" id="sidebarToggle"><i class="fa-solid fa-bars"></i></button>
+        <button class="gs-trigger" id="gsTrigger">
+          <i class="fa-solid fa-magnifying-glass"></i><span>Search everything...</span><kbd>/</kbd>
+        </button>
+      </div>
+      <div class="topbar-right" style="position:relative">
+        <button class="btn btn-primary topbar-add-btn" id="topbarAddBtn">
+          <i class="fa-solid fa-plus"></i> <span class="topbar-add-label">Add Order</span>
+        </button>
+        <div class="topbar-profile" id="topbarProfileBtn">
+          <div class="topbar-avatar" id="topbarAvatar">
+            <img id="topbarAvatarImg" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%" />
+            <span id="topbarAvatarInitials"><i class="fa-solid fa-user"></i></span>
+          </div>
+          <div class="profile-info">
+            <span class="profile-name" id="profileName">Admin</span>
+            <span class="profile-role" id="profileRole">User</span>
+          </div>
+          <i class="fa-solid fa-chevron-down" id="topbarChevron" style="font-size:.65rem;color:var(--text-muted);transition:transform .2s"></i>
+        </div>
+        <div class="topbar-dropdown hidden" id="topbarDropdown">
+          <div class="topbar-dropdown-header">
+            <div class="topbar-dd-avatar" id="topbarDdAvatar">
+              <img id="topbarDdAvatarImg" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%" />
+              <span id="topbarDdInitials"><i class="fa-solid fa-user"></i></span>
+            </div>
+            <div>
+              <div class="topbar-dd-name" id="topbarDdName">Admin</div>
+              <div class="topbar-dd-email" id="topbarDdEmail">—</div>
+            </div>
+          </div>
+          <div class="topbar-dd-divider"></div>
+          <button class="topbar-dd-item" id="ddGoProfile"><i class="fa-solid fa-circle-user"></i> My Profile</button>
+          <button class="topbar-dd-item" id="ddGoSettings"><i class="fa-solid fa-sliders"></i> Settings</button>
+          <div class="topbar-dd-divider"></div>
+          <button class="topbar-dd-item topbar-dd-danger" id="ddLogout"><i class="fa-solid fa-right-from-bracket"></i> Sign Out</button>
+        </div>
+      </div>
+    </header>
+
+    <!-- Global Search Overlay -->
+    <div class="gs-overlay hidden" id="gsOverlay">
+      <div class="gs-modal" id="gsModal">
+        <div class="gs-input-row">
+          <i class="fa-solid fa-magnifying-glass gs-icon"></i>
+          <input type="text" id="gsInput" class="gs-input" placeholder="Search models, brands, sellers..." autocomplete="off" spellcheck="false" />
+          <kbd class="gs-esc">Esc</kbd>
+        </div>
+        <div class="gs-body" id="gsBody"><div class="gs-empty"><i class="fa-solid fa-magnifying-glass"></i><span>Type to search your collection</span></div></div>
+        <div class="gs-footer">
+          <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+          <span><kbd>↵</kbd> open</span>
+          <span><kbd>Esc</kbd> close</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast-container" id="toastContainer"></div>
 
     <main class="page-content" id="pageContent">
       <!-- Section content -->
