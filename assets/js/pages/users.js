@@ -1,306 +1,1111 @@
-/**
- * PreTrack — Users Page (Admin Only)
- * Manage user accounts, roles, access requests.
- */
+'use strict';
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-app.js";
+import { getAuth, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-auth.js";
+import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, where, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
-import { requireAuth, hasRole } from '../auth/auth-guard.js';
-import { db, secondaryAuth, SUPER_ADMIN } from '../services/firebase.js';
-import {
-  initSidebar, initTopbarDropdown, syncTopbarAvatar,
-  applyRoleVisibility, showToast, setText, escHtml
-} from './dashboard-shell.js';
-import {
-  getDocs, addDoc, updateDoc, deleteDoc,
-  collection, doc, query, orderBy, serverTimestamp
-} from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
-import { createUserWithEmailAndPassword }
-  from "https://www.gstatic.com/firebasejs/12.11.0/firebase-auth.js";
-
-async function injectComponents() {
-  const [s, t] = await Promise.all([
-    fetch('../../components/sidebar.html').then(r => r.text()),
-    fetch('../../components/navbar.html').then(r => r.text()),
-  ]);
-  document.getElementById('sidebar-root').innerHTML = s;
-  document.getElementById('topbar-root').innerHTML  = t;
+const _cfg = (typeof window !== 'undefined' && window.__PRETRACK_CONFIG__) || {};
+const firebaseConfig = {
+  apiKey: _cfg.firebase?.apiKey||'', authDomain: _cfg.firebase?.authDomain||'',
+  projectId: _cfg.firebase?.projectId||'', storageBucket: _cfg.firebase?.storageBucket||'',
+  messagingSenderId: _cfg.firebase?.messagingSenderId||'', appId: _cfg.firebase?.appId||'',
+};
+let _currentUser=null, _authReady=false;
+const app=initializeApp(firebaseConfig), auth=getAuth(app), db=getFirestore(app);
+const secondaryApp=initializeApp(firebaseConfig,'secondary'), secondaryAuth=getAuth(secondaryApp);
+const SUPER_ADMIN=_cfg.superAdmin||'dlaize@dlaize.com';
+const SUPABASE_URL=_cfg.supabase?.url||'', SUPABASE_ANON_KEY=_cfg.supabase?.anonKey||'', SUPABASE_BUCKET='order-images';
+let _supabase=null;
+function getSupabase(){if(_supabase)return _supabase;if(!SUPABASE_URL)throw new Error('Supabase not configured');_supabase=createClient(SUPABASE_URL,SUPABASE_ANON_KEY);return _supabase;}
+  const ext  = file.name.split('.').pop() || 'jpg';
+  const path = `orders/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  const { error } = await getSupabase().storage.from(SUPABASE_BUCKET).upload(path, file, { cacheControl: '3600', upsert: false });
+  if (error) throw new Error(`Supabase upload failed: ${error.message}`);
+  const { data } = getSupabase().storage.from(SUPABASE_BUCKET).getPublicUrl(path);
+  return data.publicUrl;
 }
 
-let users = [];
-let accessRequests = [];
+async function deleteImageFromSupabase(imageUrl) {
+  if (!imageUrl || !imageUrl.includes(SUPABASE_URL)) return;
+  const marker = `/object/public/${SUPABASE_BUCKET}/`;
+  const idx    = imageUrl.indexOf(marker);
+  if (idx === -1) return;
+  const filePath = decodeURIComponent(imageUrl.slice(idx + marker.length).split('?')[0]);
+  const { error } = await getSupabase().storage.from(SUPABASE_BUCKET).remove([filePath]);
+  if (error) console.warn('Supabase delete failed:', error.message);
+}
 
-(async () => {
-  await injectComponents();
-  const { user, role } = await requireAuth();
+/* ══ APP STATE ══ */
+let DB = { orders: [], activity: [], accessRequests: [], users: [] };
+let _currentImageFile = null;
+let _currentImageB64  = '';
+let _authReady        = false;
 
-  if (!hasRole(role, 'admin')) {
-    document.getElementById('section-users').innerHTML =
-      '<div class="empty-state"><i class="fa-solid fa-lock"></i> Admin access required.</div>';
-    return;
+/* ══════════════════════════════════════════════════════════════════
+   BRAND STATE — module-level so both fetchData() and initDashboard()
+   can read/write without closure issues
+══════════════════════════════════════════════════════════════════ */
+const BASE_BRANDS = ['Hot Wheels','Mini GT','Pop Race','Tarmac Works','Tomica','Matchbox','Kaido House','Inno64'];
+let customBrands  = [];
+
+function getAllBrands() { return [...BASE_BRANDS, ...customBrands]; }
+
+function rebuildDropdown(selectEl, selectedVal) {
+  if (!selectEl) return;
+  while (selectEl.options.length) selectEl.remove(0);
+  const ph = document.createElement('option');
+  ph.value = ''; ph.textContent = 'Select Brand';
+  selectEl.appendChild(ph);
+  getAllBrands().forEach(b => {
+    const o = document.createElement('option'); o.value = b; o.textContent = b;
+    selectEl.appendChild(o);
+  });
+  const nw = document.createElement('option');
+  nw.value = '__new__'; nw.textContent = '＋ Add New Brand';
+  selectEl.appendChild(nw);
+  if (selectedVal) selectEl.value = selectedVal;
+}
+
+function rebuildAllBrandDropdowns(selectedVal) {
+  rebuildDropdown(document.getElementById('fBrandSelect'), selectedVal);
+  rebuildDropdown(document.getElementById('pBrandSelect'), selectedVal);
+}
+
+async function fetchData() {
+  // Warn if secrets not injected but continue anyway
+  if (firebaseConfig.apiKey.startsWith('__')) {
+    console.error('WARNING: Firebase credentials not injected by GitHub Actions.');
   }
 
-  initSidebar();
-  initTopbarDropdown(user);
-  applyRoleVisibility(role);
-  syncTopbarAvatar({ email: user.email, role });
-
-  buildPageHTML();
-  await Promise.all([fetchUsers(), fetchAccessRequests()]);
-  initAddUser();
-})();
-
-function buildPageHTML() {
-  document.getElementById('section-users').innerHTML = `
-    <div class="section-header">
-      <div><h2 class="section-title">User Management</h2><p class="section-sub">Manage accounts &amp; access</p></div>
-      <button class="btn btn-primary" id="addUserBtn"><i class="fa-solid fa-user-plus"></i> Add User</button>
-    </div>
-
-    <!-- Users table -->
-    <div class="widget glass" style="overflow-x:auto">
-      <div class="widget-header"><h3><i class="fa-solid fa-users"></i> All Users</h3></div>
-      <table class="orders-table">
-        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
-        <tbody id="usersBody"></tbody>
-      </table>
-    </div>
-
-    <!-- Access Requests -->
-    <div class="widget glass" style="margin-top:1.5rem;overflow-x:auto">
-      <div class="widget-header"><h3><i class="fa-solid fa-user-clock"></i> Access Requests <span class="nav-badge" id="reqCountBadge" style="display:none"></span></h3></div>
-      <div id="accessRequestsPanel"></div>
-    </div>
-
-    <!-- Add User Modal -->
-    <div class="modal-overlay hidden" id="addUserModal">
-      <div class="modal glass" style="max-width:420px">
-        <div class="modal-header" style="padding:1.25rem 1.25rem 0">
-          <h3>Add New User</h3>
-          <button class="modal-close" id="auClose"><i class="fa-solid fa-xmark"></i></button>
-        </div>
-        <div style="padding:1.25rem">
-          <div class="form-group" style="margin-bottom:.85rem">
-            <label class="fg-label">Display Name</label>
-            <input type="text" id="auName" class="fg-input" placeholder="Full name" />
-          </div>
-          <div class="form-group" style="margin-bottom:.85rem">
-            <label class="fg-label">Email <span class="fg-required">*</span></label>
-            <input type="email" id="auEmail" class="fg-input" placeholder="user@example.com" required />
-          </div>
-          <div class="form-group" style="margin-bottom:.85rem">
-            <label class="fg-label">Password <span class="fg-required">*</span></label>
-            <input type="password" id="auPw" class="fg-input" placeholder="Min 6 characters" required />
-          </div>
-          <div class="form-group" style="margin-bottom:1.25rem">
-            <label class="fg-label">Role</label>
-            <select id="auRole" class="fg-input fg-select">
-              <option value="viewer">Viewer</option>
-              <option value="editor">Editor</option>
-              <option value="admin">Admin</option>
-            </select>
-          </div>
-          <div class="form-error hidden" id="auError" style="margin-bottom:.75rem;padding:.6rem .85rem;background:rgba(239,68,68,0.07);border:1px solid rgba(239,68,68,0.22);border-radius:8px;font-size:.8rem;color:#dc2626">
-            <span id="auErrorMsg"></span>
-          </div>
-          <div style="display:flex;gap:.6rem">
-            <button class="btn btn-ghost" id="auCancel" style="flex:1">Cancel</button>
-            <button class="btn btn-primary" id="auSave" style="flex:1"><i class="fa-solid fa-user-plus"></i> Create User</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-async function fetchUsers() {
   try {
-    const snap = await getDocs(query(collection(db, 'users'), orderBy('createdAt', 'desc')));
-    users = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderUsers();
-  } catch (e) { showToast('Failed to load users', 'error'); }
+    const user = auth.currentUser;
+    if (!user) return;
+    const currentEmail = (user.email || '').toLowerCase().trim();
+    const isAdmin      = currentEmail === SUPER_ADMIN.toLowerCase().trim();
+
+    // Wrap each fetch individually — one failure won't kill everything
+    const safeGet = async (ref) => {
+      try { return await getDocs(ref); }
+      catch(e) { console.warn('Fetch failed:', e.code, e.message); return { docs: [] }; }
+    };
+
+    const [ordSnap, actSnap, brnSnap] = await Promise.all([
+      safeGet(collection(db, 'orders')),
+      safeGet(collection(db, 'activity')),
+      safeGet(collection(db, 'brands')),
+    ]);
+
+    const arsSnap = isAdmin ? await safeGet(collection(db, 'access_requests')) : { docs: [] };
+    const usrSnap = isAdmin ? await safeGet(collection(db, 'users'))           : { docs: [] };
+
+    DB.orders = ordSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    // Fix incorrect totals in memory + Firestore silently
+    DB.orders.forEach(o => {
+      const unit    = (parseFloat(o.actual_price) > 0 ? parseFloat(o.actual_price) : parseFloat(o.preorder_price)) || 0;
+      const qty     = parseInt(o.quantity) || 1;
+      const ship    = parseFloat(o.shipping) || 0;
+      const paid    = parseFloat(o.paid) || 0;
+      const correct = (unit * qty) + ship;
+      const pend    = Math.max(0, correct - paid);
+      if (Math.abs((o.total||0) - correct) > 1) {
+        o.total   = correct;
+        o.pending = pend;
+        updateDoc(doc(db, 'orders', o.id), { total: correct, pending: pend })
+          .catch(e => console.warn('Fix order:', o.id, e.message));
+      }
+    });
+
+    DB.activity = actSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    customBrands = brnSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .map(b => b.name)
+      .filter(Boolean);
+    rebuildAllBrandDropdowns();
+
+    DB.accessRequests = isAdmin
+      ? arsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      : [];
+
+    DB.users = isAdmin
+      ? usrSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      : [];
+
+    console.log(`fetchData: ${DB.orders.length} orders loaded`);
+    renderAll();
+
+  } catch(err) {
+    console.error('fetchData fatal error:', err);
+    DB = { orders: [], activity: [], accessRequests: [], users: [] };
+    renderAll();
+    showToast('Error loading data: ' + (err.code || err.message), 'warning');
+  }
 }
 
-async function fetchAccessRequests() {
+async function addActivity(type, msg) {
+  const user = auth.currentUser;
   try {
-    const snap = await getDocs(query(collection(db, 'access_requests'), orderBy('createdAt', 'desc')));
-    accessRequests = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    renderAccessRequests();
-  } catch (e) { /* ignore */ }
+    await addDoc(collection(db, 'activity'), {
+      type, msg, time: new Date().toLocaleString(),
+      createdAt:  serverTimestamp(),
+      ownerUid:   user?.uid   || '',
+      ownerEmail: user?.email || ''
+    });
+  } catch(e) { console.error('addActivity error:', e); }
 }
 
-function renderUsers() {
-  const tbody = document.getElementById('usersBody');
-  if (!users.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty-row">No users yet</td></tr>'; return; }
+function setText(id, val) { const el=document.getElementById(id); if(el) el.textContent=val; }
+function escHtml(str='')  { return String(str).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'); }
+function formatDate(s)    { if(!s) return '—'; const d=new Date(s); return isNaN(d)?s:d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}); }
 
-  tbody.innerHTML = users.map(u => {
-    const roleColors = { super_admin:'#7c5cfc', admin:'#6366f1', editor:'#14b8a6', viewer:'#22c55e' };
-    const roleColor  = roleColors[u.role] || '#9090b8';
-    return `<tr>
-      <td><strong>${escHtml(u.name||u.displayName||'—')}</strong></td>
-      <td>${escHtml(u.email)}</td>
-      <td>
-        <span style="background:${roleColor}20;color:${roleColor};padding:2px 10px;border-radius:20px;font-size:.7rem;font-weight:700;text-transform:uppercase">
-          ${u.role||'viewer'}
-        </span>
-      </td>
-      <td>
-        <span style="color:${u.status==='disabled'?'#ef4444':'#22c55e'};font-size:.78rem;font-weight:600">
-          ${u.status==='disabled'?'Disabled':'Active'}
-        </span>
-      </td>
-      <td>
-        <select class="filter-select role-changer" data-id="${u.id}" style="font-size:.75rem;padding:.3rem .6rem">
-          <option value="viewer"   ${u.role==='viewer'  ?'selected':''}>Viewer</option>
-          <option value="editor"   ${u.role==='editor'  ?'selected':''}>Editor</option>
-          <option value="admin"    ${u.role==='admin'   ?'selected':''}>Admin</option>
-        </select>
-        <button class="btn btn-danger btn-sm del-user-btn" data-id="${u.id}" title="Delete" style="margin-left:.5rem">
-          <i class="fa-solid fa-trash"></i>
-        </button>
-        <button class="btn btn-ghost btn-sm toggle-status-btn" data-id="${u.id}" data-status="${u.status||'active'}" style="margin-left:.25rem">
-          ${u.status==='disabled'?'Enable':'Disable'}
-        </button>
-      </td>
-    </tr>`;
-  }).join('');
-
-  tbody.querySelectorAll('.role-changer').forEach(sel => {
-    sel.addEventListener('change', async () => {
-      try {
-        await updateDoc(doc(db, 'users', sel.dataset.id), { role: sel.value });
-        showToast('Role updated', 'success');
-        users.find(u => u.id === sel.dataset.id).role = sel.value;
-      } catch (e) { showToast('Failed to update role', 'error'); }
-    });
-  });
-
-  tbody.querySelectorAll('.del-user-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (!confirm('Delete this user? This cannot be undone.')) return;
-      try {
-        await deleteDoc(doc(db, 'users', btn.dataset.id));
-        showToast('User deleted', 'success');
-        await fetchUsers();
-      } catch (e) { showToast('Failed to delete user', 'error'); }
-    });
-  });
-
-  tbody.querySelectorAll('.toggle-status-btn').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const newStatus = btn.dataset.status === 'disabled' ? 'active' : 'disabled';
-      try {
-        await updateDoc(doc(db, 'users', btn.dataset.id), { status: newStatus });
-        showToast(`User ${newStatus === 'disabled' ? 'disabled' : 'enabled'}`, 'success');
-        await fetchUsers();
-      } catch (e) { showToast('Failed to update status', 'error'); }
-    });
-  });
+function showToast(message, type='info') {
+  let t = document.getElementById('globalToast');
+  if (!t) {
+    t = document.createElement('div'); t.id = 'globalToast';
+    Object.assign(t.style, { position:'fixed', right:'20px', bottom:'20px', zIndex:'9999',
+      padding:'12px 16px', borderRadius:'12px', color:'#fff', fontSize:'14px', fontWeight:'600',
+      boxShadow:'0 10px 30px rgba(0,0,0,.25)', transition:'all .25s ease',
+      transform:'translateY(20px)', opacity:'0' });
+    document.body.appendChild(t);
+  }
+  t.style.background = { success:'linear-gradient(135deg,#22c55e,#14b8a6)', warning:'linear-gradient(135deg,#f97316,#ef4444)', info:'linear-gradient(135deg,#7c5cfc,#6366f1)' }[type] || 'linear-gradient(135deg,#7c5cfc,#6366f1)';
+  t.textContent = message;
+  requestAnimationFrame(() => { t.style.transform='translateY(0)'; t.style.opacity='1'; });
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(() => { t.style.transform='translateY(20px)'; t.style.opacity='0'; }, 2500);
 }
-
-function renderAccessRequests() {
-  const pending = accessRequests.filter(r => r.status === 'pending');
-  const badge   = document.getElementById('reqCountBadge');
-  if (pending.length) { badge.textContent = pending.length; badge.style.display = 'inline-flex'; }
-  else badge.style.display = 'none';
-
-  const el = document.getElementById('accessRequestsPanel');
-  if (!accessRequests.length) { el.innerHTML = '<div class="empty-state"><i class="fa-solid fa-inbox"></i> No access requests</div>'; return; }
-
-  el.innerHTML = `<div style="overflow-x:auto"><table class="orders-table">
-    <thead><tr><th>Name</th><th>Email</th><th>Reason</th><th>Status</th><th>Actions</th></tr></thead>
-    <tbody>${accessRequests.map(r => `<tr>
-      <td>${escHtml(r.name||'—')}</td>
-      <td>${escHtml(r.email)}</td>
-      <td style="max-width:200px;font-size:.78rem">${escHtml(r.reason||'—')}</td>
-      <td>
-        <span style="color:${r.status==='approved'?'#22c55e':r.status==='denied'?'#ef4444':'#f97316'};font-weight:700;font-size:.75rem;text-transform:uppercase">
-          ${r.status||'pending'}
-        </span>
-      </td>
-      <td>
-        ${r.status === 'pending' ? `
-          <button class="btn btn-primary btn-sm approve-req" data-id="${r.id}" data-email="${escHtml(r.email)}" data-name="${escHtml(r.name||'')}">Approve</button>
-          <button class="btn btn-danger btn-sm deny-req" data-id="${r.id}" style="margin-left:.35rem">Deny</button>
-        ` : `<span style="font-size:.75rem;color:var(--text-muted)">—</span>`}
-      </td>
-    </tr>`).join('')}</tbody>
-  </table></div>`;
-
-  el.querySelectorAll('.approve-req').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        await updateDoc(doc(db, 'access_requests', btn.dataset.id), { status: 'approved' });
-        showToast(`Request approved for ${btn.dataset.email}`, 'success');
-        await fetchAccessRequests();
-      } catch (e) { showToast('Failed to approve', 'error'); }
-    });
-  });
-
-  el.querySelectorAll('.deny-req').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      try {
-        await updateDoc(doc(db, 'access_requests', btn.dataset.id), { status: 'denied' });
-        showToast('Request denied', 'success');
-        await fetchAccessRequests();
-      } catch (e) { showToast('Failed to deny', 'error'); }
-    });
-  });
-}
-
-function initAddUser() {
-  document.getElementById('addUserBtn')?.addEventListener('click', () => {
-    document.getElementById('addUserModal').classList.remove('hidden');
-  });
-  const closeModal = () => {
-    document.getElementById('addUserModal').classList.add('hidden');
-    document.getElementById('auError').classList.add('hidden');
-    ['auName','auEmail','auPw'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
-    document.getElementById('auRole').value = 'viewer';
-    document.getElementById('auSave').disabled = false;
-    document.getElementById('auSave').innerHTML = '<i class="fa-solid fa-user-plus"></i> Create User';
-  };
-
-  document.getElementById('auClose')?.addEventListener('click', closeModal);
-  document.getElementById('auCancel')?.addEventListener('click', closeModal);
-  document.getElementById('addUserModal')?.addEventListener('click', e => { if (e.target.id === 'addUserModal') closeModal(); });
-
-  document.getElementById('auSave')?.addEventListener('click', async () => {
-    const name  = document.getElementById('auName').value.trim();
-    const email = document.getElementById('auEmail').value.trim();
-    const pw    = document.getElementById('auPw').value;
-    const role  = document.getElementById('auRole').value;
-    const errEl = document.getElementById('auError');
-    const msgEl = document.getElementById('auErrorMsg');
-    const btn   = document.getElementById('auSave');
-
-    errEl.classList.add('hidden');
-    if (!email || !pw) { msgEl.textContent = 'Email and password are required.'; errEl.classList.remove('hidden'); return; }
-    if (pw.length < 6)  { msgEl.textContent = 'Password must be at least 6 characters.'; errEl.classList.remove('hidden'); return; }
-
-    btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creating...';
-
+function initGreeting() {
+  async function getDisplayName() {
+    const user = auth.currentUser; if (!user) return 'there';
+    if (user.email?.toLowerCase() === SUPER_ADMIN.toLowerCase()) return 'Super Admin';
     try {
-      // Create Firebase Auth user via secondary app (doesn't sign out current user)
-      const cred = await createUserWithEmailAndPassword(secondaryAuth, email, pw);
-      // Store in Firestore users collection
-      await addDoc(collection(db, 'users'), {
-        uid: cred.user.uid,
-        name: name || email,
-        email,
-        role,
-        status: 'active',
-        createdAt: serverTimestamp(),
+      const snap = await getDocs(query(collection(db, 'users'), where('email', '==', user.email)));
+      if (!snap.empty) { const d = snap.docs[0].data(); if (d.name?.trim()) return d.name.trim(); }
+    } catch(e) { /* fallback */ }
+    return (user.email || '').split('@')[0] || 'there';
+  }
+  function update(name) {
+    const h    = new Date().getHours();
+    const msgs = h < 5
+      ? ['Still up? Dedication. 🌙', 'Night owl mode. 🦉', 'The collection never sleeps. 🌙']
+      : h < 12
+      ? ['Ready to track. ☕', 'New day, new models. 🏎️', 'Collection check time. 📦']
+      : h < 17
+      ? ['Keep the fleet growing. 🚗', 'Midday collection check. 📊', 'Any new arrivals? 📬']
+      : h < 21
+      ? ['Evening patrol. 🌆', 'End of day review. 📋', 'How\'s the collection today? 🏎️']
+      : ['Night shift. 🌙', 'Late night tracking. 🔦', 'One last check. 🌙'];
+    const msg = msgs[Math.floor(Math.random() * msgs.length)];
+
+    const gt = document.getElementById('greetingText');
+    if (gt) gt.innerHTML = `<span style="color:var(--primary);font-weight:900">${escHtml(name)}</span> — ${msg}`;
+
+    const gd = document.getElementById('greetingDate');
+    if (gd) gd.textContent = new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+
+    // Sync avatar in hero
+    const saved   = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+    const avatUrl = saved.avatarUrl || '';
+    const initials= name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2) || 'DA';
+    const hImg = document.getElementById('dashHeroAvatarImg');
+    const hIni = document.getElementById('dashHeroAvatarIni');
+    if (avatUrl && hImg) { hImg.src=avatUrl; hImg.style.display='block'; if(hIni) hIni.style.display='none'; }
+    else { if(hImg) hImg.style.display='none'; if(hIni) { hIni.style.display='flex'; hIni.textContent=initials; } }
+
+    // Hero stats
+    const fmt = v => '₹'+Number(v||0).toLocaleString('en-IN');
+    const today = new Date(); today.setHours(0,0,0,0);
+    const in7   = new Date(today); in7.setDate(today.getDate()+7);
+    const due   = DB.orders.reduce((s,o)=>s+(o.pending||0),0);
+    const week  = DB.orders.filter(o=>{
+      if (!o.eta||o.status==='Delivered'||o.status==='Cancelled') return false;
+      const d=new Date(o.eta); d.setHours(0,0,0,0); return d>=today&&d<=in7;
+    }).length;
+    setText('dhStatModels', DB.orders.length);
+    setText('dhStatDue',    fmt(due));
+    setText('dhStatEta',    week + ' orders');
+  }
+  function checkSys() {
+    const ss = document.getElementById('systemStatus'); if (!ss) return;
+    ss.innerHTML = `<span class="status-dot"></span> Checking systems…`; ss.className = 'system-status';
+    setTimeout(() => { ss.innerHTML = `<span class="status-dot"></span> All systems live`; ss.className = 'system-status live'; }, 1200);
+  }
+  getDisplayName().then(name => { update(name); setInterval(() => update(name), 60000); });
+  checkSys();
+}
+
+function updateHeroStats() {
+  const fmt   = v => '₹' + Number(v||0).toLocaleString('en-IN');
+  const today = new Date(); today.setHours(0,0,0,0);
+  const in7   = new Date(today); in7.setDate(today.getDate()+7);
+  const due   = DB.orders.reduce((s,o)=>s+(o.pending||0),0);
+  const week  = DB.orders.filter(o=>{
+    if(!o.eta||o.status==='Delivered'||o.status==='Cancelled') return false;
+    const d=new Date(o.eta); d.setHours(0,0,0,0); return d>=today&&d<=in7;
+  }).length;
+  setText('dhStatModels', DB.orders.length);
+  setText('dhStatDue',    fmt(due));
+  setText('dhStatEta',    week + (week===1?' order':' orders'));
+  // Sync avatar in hero bar
+  const saved    = JSON.parse(localStorage.getItem('pretrack_profile')||'{}');
+  const user     = auth.currentUser;
+  const isAdmin  = user?.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
+  const name     = saved.displayName||(isAdmin?'Super Admin':user?.email?.split('@')[0]||'DA');
+  const initials = name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2)||'DA';
+  const hImg = document.getElementById('dashHeroAvatarImg');
+  const hIni = document.getElementById('dashHeroAvatarIni');
+  if(saved.avatarUrl&&hImg){hImg.src=saved.avatarUrl;hImg.style.display='block';if(hIni)hIni.style.display='none';}
+  else{if(hImg)hImg.style.display='none';if(hIni){hIni.style.display='flex';hIni.textContent=initials;}}
+}
+
+function renderAll() {
+  renderStats();
+  applyCollectionFilters();
+  populateBrandFilter();
+  renderRecentOrders();
+  renderEtaWidget();
+  renderActivityFeed();
+  renderAlerts();
+  renderPayments();
+  renderAnalytics();
+  renderBrandLeaderboard();
+  renderWeekArrivals();
+  if (typeof renderCatalog === 'function') renderCatalog();
+  renderSellers();
+  renderUpcoming();
+  renderUsers();
+  renderAccessRequests();
+  renderCalendar();
+  renderBrands();
+  renderSettingsInfo();
+  renderProfile();
+  syncTopbarAvatar();
+  updateHeroStats();
+  const ss = document.getElementById('systemStatus');
+  if (ss) { ss.innerHTML = `<span class="status-dot"></span> All systems live`; ss.className = 'system-status live'; }
+}
+
+function renderSettingsInfo() {
+  const cnt = document.getElementById('settingsModelCount');
+  if (cnt) cnt.textContent = `${DB.orders.length} model${DB.orders.length !== 1 ? 's' : ''}`;
+  const user = auth.currentUser;
+  const emailEl = document.getElementById('settingsUserEmail');
+  if (emailEl && user) emailEl.textContent = user.email || '—';
+}
+
+function renderProfile() {
+  const user    = auth.currentUser; if (!user) return;
+  const orders  = DB.orders;
+  const fmt     = v => '₹' + Number(v||0).toLocaleString('en-IN');
+  const isAdmin = user.email?.toLowerCase() === SUPER_ADMIN.toLowerCase();
+
+  // Load saved profile data
+  const saved     = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+  const name      = saved.displayName || (isAdmin ? 'Super Admin' : user.email?.split('@')[0] || 'User');
+  const favBrand  = saved.favBrand || '';
+  const bio       = saved.bio || '';
+  const avatarUrl = saved.avatarUrl || '';
+
+  // Avatar
+  const initials  = name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+  const avatarImg = document.getElementById('profileAvatarImg');
+  const avatarIni = document.getElementById('profileAvatarInitials');
+  if (avatarUrl && avatarImg) {
+    avatarImg.src = avatarUrl; avatarImg.style.display = 'block';
+    if (avatarIni) avatarIni.style.display = 'none';
+  } else {
+    if (avatarImg) avatarImg.style.display = 'none';
+    if (avatarIni) { avatarIni.style.display = 'flex'; avatarIni.textContent = initials; }
+  }
+
+  // Identity
+  setText('profileDisplayName', name);
+  setText('profileRoleBadge',   (isAdmin ? '⚡ Super Admin' : '👤 User'));
+  setText('profileEmailTag',    user.email || '—');
+  setText('profileSince',       user.metadata?.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString('en-IN',{month:'short',year:'numeric'}) : '—');
+
+  // Quick stats
+  const delivered = orders.filter(o=>o.status==='Delivered').length;
+  const pending   = orders.filter(o=>o.status!=='Delivered'&&o.status!=='Cancelled').length;
+  const totalDue  = orders.reduce((s,o)=>s+(o.pending||0),0);
+  setText('pStatModels',    orders.length);
+  setText('pStatDelivered', delivered);
+  setText('pStatPending',   pending);
+  setText('pStatDue',       fmt(totalDue));
+
+  // Form
+  const nameInput  = document.getElementById('profileNameInput');
+  const emailInput = document.getElementById('profileEmailInput');
+  const brandInput = document.getElementById('profileFavBrand');
+  const bioInput   = document.getElementById('profileBio');
+  if (nameInput)  nameInput.value  = name;
+  if (emailInput) emailInput.value = user.email || '—';
+  if (brandInput) brandInput.value = favBrand;
+  if (bioInput)   bioInput.value   = bio;
+
+  // Account info
+  setText('profileAccEmail', user.email || '—');
+  setText('profileAccUid',   user.uid   || '—');
+  setText('profileAccRole',  isAdmin ? 'Super Admin' : 'User');
+
+  // Collection breakdown by status
+  const statuses = ['Ordered','In Transit','Delivered','Cancelled'];
+  const colors   = ['#4f46e5','#0284c7','#16a34a','#6b7280'];
+  const counts   = statuses.map(s => orders.filter(o=>o.status===s).length);
+  const maxCount = Math.max(...counts, 1);
+  const bdEl = document.getElementById('profileBreakdown');
+  if (bdEl) {
+    bdEl.innerHTML = statuses.map((s,i) => `
+      <div class="profile-breakdown-row">
+        <span class="profile-breakdown-label">${s}</span>
+        <div class="profile-breakdown-bar-wrap">
+          <div class="profile-breakdown-bar" style="width:${Math.round((counts[i]/maxCount)*100)}%;background:${colors[i]}"></div>
+        </div>
+        <span class="profile-breakdown-count">${counts[i]}</span>
+      </div>`).join('');
+  }
+}
+
+function syncTopbarAvatar() {
+  const saved    = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+  const user     = auth.currentUser;
+  const isAdmin  = user?.email?.toLowerCase() === SUPER_ADMIN.toLowerCase();
+  const name     = saved.displayName || (isAdmin ? 'Super Admin' : user?.email?.split('@')[0] || 'User');
+  const initials = name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+  const url      = saved.avatarUrl || '';
+
+  // Topbar small avatar
+  const img = document.getElementById('topbarAvatarImg');
+  const ini = document.getElementById('topbarAvatarInitials');
+  if (url && img) { img.src=url; img.style.display='block'; if(ini) ini.style.display='none'; }
+  else { if(img) img.style.display='none'; if(ini) { ini.style.display='flex'; ini.textContent=initials; } }
+
+  // Dropdown large avatar
+  const ddImg = document.getElementById('topbarDdAvatarImg');
+  const ddIni = document.getElementById('topbarDdInitials');
+  if (url && ddImg) { ddImg.src=url; ddImg.style.display='block'; if(ddIni) ddIni.style.display='none'; }
+  else { if(ddImg) ddImg.style.display='none'; if(ddIni) { ddIni.style.display='flex'; ddIni.textContent=initials; } }
+
+  // Names
+  setText('profileName',  name);
+  setText('profileRole',  isAdmin ? 'Super Admin' : 'User');
+  setText('topbarDdName', name);
+  setText('topbarDdEmail', user?.email || '—');
+}
+
+function initGlobalSearch() {
+  const overlay  = document.getElementById('gsOverlay');
+  const modal    = document.getElementById('gsModal');
+  const input    = document.getElementById('gsInput');
+  const body     = document.getElementById('gsBody');
+  const trigger  = document.getElementById('gsTrigger');
+  if (!overlay || !input) return;
+
+  let activeIdx  = -1;
+  let results    = [];
+
+  function open() {
+    overlay.classList.remove('hidden');
+    input.value = '';
+    body.innerHTML = `<div class="gs-empty"><i class="fa-solid fa-magnifying-glass"></i><span>Type to search your collection</span></div>`;
+    activeIdx = -1; results = [];
+    setTimeout(() => input.focus(), 50);
+  }
+
+  function close() {
+    overlay.classList.add('hidden');
+    input.value = '';
+    activeIdx = -1; results = [];
+  }
+
+  // Open triggers
+  trigger?.addEventListener('click', open);
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && !['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) {
+      e.preventDefault(); open();
+    }
+    if (e.key === 'Escape') close();
+  });
+
+  // Close on overlay click (outside modal)
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  // Keyboard navigation inside modal
+  input.addEventListener('keydown', e => {
+    const rows = body.querySelectorAll('.gs-result');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeIdx = Math.min(activeIdx + 1, rows.length - 1);
+      rows.forEach((r,i) => r.classList.toggle('gs-active', i === activeIdx));
+      rows[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIdx = Math.max(activeIdx - 1, 0);
+      rows.forEach((r,i) => r.classList.toggle('gs-active', i === activeIdx));
+      rows[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const active = body.querySelector('.gs-result.gs-active');
+      if (active) active.click();
+      else if (rows.length) rows[0].click();
+    } else if (e.key === 'Escape') {
+      close();
+    }
+  });
+
+  // Search on input
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    if (!q) {
+      body.innerHTML = `<div class="gs-empty"><i class="fa-solid fa-magnifying-glass"></i><span>Type to search your collection</span></div>`;
+      activeIdx = -1; return;
+    }
+    doSearch(q);
+  });
+
+  function hl(text, q) {
+    if (!q) return escHtml(text);
+    const safe = escHtml(text);
+    const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return safe.replace(new RegExp('(' + safeQ + ')', 'gi'), '<mark>$1</mark>');
+  }
+
+  function navigateTo(section) {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.querySelector(`.nav-item[data-section="${section}"]`)?.classList.add('active');
+    document.getElementById(`section-${section}`)?.classList.add('active');
+    const sdw = document.getElementById('sellerDetailWrap');
+    const sg  = document.getElementById('sellerGrid');
+    if (sdw && sg) { sdw.classList.remove('visible'); sg.style.display = ''; }
+  }
+
+  function doSearch(q) {
+    const fmt = v => '₹' + Number(v||0).toLocaleString('en-IN');
+    let html  = '';
+
+    // ── MODELS ──
+    const models = DB.orders.filter(o =>
+      (o.product_name||'').toLowerCase().includes(q) ||
+      (o.brand||'').toLowerCase().includes(q) ||
+      (o.scale||'').toLowerCase().includes(q) ||
+      (o.variant||'').toLowerCase().includes(q) ||
+      (o.order_number||'').toString().includes(q)
+    ).slice(0, 8);
+
+    if (models.length) {
+      html += '<div class="gs-section-label"><i class="fa-solid fa-car-side"></i> Models</div>';
+      html += models.map((o,i) => {
+        const sc    = (o.status||'').toLowerCase().replace(/\s+/g,'-');
+        const thumb = o.image
+          ? `<img src="${escHtml(o.image)}" alt="" />`
+          : `<i class="fa-solid fa-car-side"></i>`;
+        return `<div class="gs-result" data-type="order" data-id="${o.id}">
+          <div class="gs-result-thumb">${thumb}</div>
+          <div class="gs-result-info">
+            <div class="gs-result-name">${hl(o.product_name||'—', q)}</div>
+            <div class="gs-result-sub">${escHtml(o.brand||'—')} · ${escHtml(o.scale||'1:64')}${o.vendor?' · '+escHtml(o.vendor):''}</div>
+          </div>
+          <div class="gs-result-right">
+            <span class="badge badge-${sc} gs-result-badge">${escHtml(o.status||'Ordered')}</span>
+            <span class="gs-result-price">${fmt(o.total||0)}</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // ── SELLERS ──
+    const sellers = [...new Set(DB.orders.map(o => o.vendor).filter(Boolean))]
+      .filter(v => v.toLowerCase().includes(q)).slice(0, 4);
+
+    if (sellers.length) {
+      html += '<div class="gs-section-label"><i class="fa-solid fa-store"></i> Sellers</div>';
+      html += sellers.map(s => {
+        const ords  = DB.orders.filter(o => o.vendor === s);
+        const total = ords.reduce((x,o)=>x+(o.total||0),0);
+        return `<div class="gs-result" data-type="seller" data-seller="${escHtml(s)}">
+          <div class="gs-result-thumb" style="background:linear-gradient(135deg,#7c5cfc,#5b3fd4);color:#fff;font-size:.8rem"><i class="fa-solid fa-store"></i></div>
+          <div class="gs-result-info">
+            <div class="gs-result-name">${hl(s, q)}</div>
+            <div class="gs-result-sub">${ords.length} order${ords.length!==1?'s':''}</div>
+          </div>
+          <div class="gs-result-right">
+            <span class="gs-result-price">${fmt(total)}</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // ── BRANDS ──
+    const brands = [...new Set(DB.orders.map(o => o.brand).filter(Boolean))]
+      .filter(b => b.toLowerCase().includes(q)).slice(0, 4);
+
+    if (brands.length) {
+      html += '<div class="gs-section-label"><i class="fa-solid fa-tag"></i> Brands</div>';
+      html += brands.map(b => {
+        const ords  = DB.orders.filter(o => o.brand === b);
+        const total = ords.reduce((x,o)=>x+(o.total||0),0);
+        return `<div class="gs-result" data-type="brand" data-brand="${escHtml(b)}">
+          <div class="gs-result-thumb" style="background:rgba(124,92,252,0.15);color:#7c5cfc;font-size:.85rem"><i class="fa-solid fa-building"></i></div>
+          <div class="gs-result-info">
+            <div class="gs-result-name">${hl(b, q)}</div>
+            <div class="gs-result-sub">${ords.length} model${ords.length!==1?'s':''} · ${fmt(total)}</div>
+          </div>
+          <div class="gs-result-right">
+            <span style="font-size:.68rem;color:var(--text-muted)">${ords.filter(o=>o.status==='Delivered').length} delivered</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    if (!models.length && !sellers.length && !brands.length) {
+      html = `<div class="gs-no-results"><i class="fa-solid fa-circle-xmark" style="font-size:1.5rem;opacity:.2;display:block;margin-bottom:.5rem"></i>No results for "<strong>${escHtml(q)}</strong>"</div>`;
+    }
+
+    body.innerHTML = html;
+    activeIdx = -1;
+
+    // Wire up click handlers
+    body.querySelectorAll('.gs-result').forEach(row => {
+      row.addEventListener('click', () => {
+        const type   = row.dataset.type;
+        const id     = row.dataset.id;
+        const seller = row.dataset.seller;
+        const brand  = row.dataset.brand;
+        close();
+        if (type === 'order') {
+          setTimeout(() => window.viewOrder?.(id), 100);
+        } else if (type === 'seller') {
+          navigateTo('sellers');
+          setTimeout(() => window.showSellerDetail?.(seller), 150);
+        } else if (type === 'brand') {
+          navigateTo('brands');
+          setTimeout(() => window.showBrandDetail?.(brand), 150);
+        }
       });
-      showToast('User created!', 'success');
-      closeModal();
-      await fetchUsers();
-    } catch (e) {
-      let msg = 'Failed to create user.';
-      if (e.code === 'auth/email-already-in-use') msg = 'This email is already registered.';
-      if (e.code === 'auth/weak-password')        msg = 'Password is too weak.';
-      if (e.code === 'auth/invalid-email')        msg = 'Invalid email address.';
-      msgEl.textContent = msg;
-      errEl.classList.remove('hidden');
-      btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-user-plus"></i> Create User';
+    });
+  }
+}
+
+function initTopbarDropdown() {
+  const btn      = document.getElementById('topbarProfileBtn');
+  const dropdown = document.getElementById('topbarDropdown');
+  const chevron  = document.getElementById('topbarChevron');
+  if (!btn || !dropdown) return;
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const open = !dropdown.classList.contains('hidden');
+    dropdown.classList.toggle('hidden', open);
+    if (chevron) chevron.style.transform = open ? '' : 'rotate(180deg)';
+    if (!open) syncTopbarAvatar();
+  });
+
+  document.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    if (chevron) chevron.style.transform = '';
+  });
+
+  document.getElementById('ddGoProfile')?.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    if (chevron) chevron.style.transform = '';
+    // Navigate to profile section
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+    document.querySelector('.nav-item[data-section="profile"]')?.classList.add('active');
+    document.getElementById('section-profile')?.classList.add('active');
+    renderProfile();
+  });
+
+  document.getElementById('ddGoSettings')?.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    if (chevron) chevron.style.transform = '';
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+    document.querySelector('.nav-item[data-section="settings"]')?.classList.add('active');
+    document.getElementById('section-settings')?.classList.add('active');
+  });
+
+  document.getElementById('ddLogout')?.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    document.getElementById('logoutBtn')?.click();
+  });
+
+  // Initial sync
+  syncTopbarAvatar();
+}
+
+/* ══════════════════════════════════════ PROFILE FIRESTORE ══════════════════════════════════════ */
+async function loadProfileFromFirestore() {
+  const user = auth.currentUser; if (!user) return;
+  try {
+    const snap = await getDocs(query(collection(db, 'users'), where('email','==',user.email)));
+    if (!snap.empty) {
+      const data   = snap.docs[0].data();
+      const local  = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+      const merged = {
+        ...local,
+        displayName: data.displayName || local.displayName || '',
+        favBrand:    data.favBrand    || local.favBrand    || '',
+        bio:         data.bio         || local.bio         || '',
+        avatarUrl:   data.avatarUrl   || local.avatarUrl   || '',
+        _docId:      snap.docs[0].id
+      };
+      localStorage.setItem('pretrack_profile', JSON.stringify(merged));
+    }
+  } catch(e) { console.warn('loadProfileFromFirestore:', e.message); }
+}
+
+async function saveProfileToFirestore(fields) {
+  const user = auth.currentUser; if (!user) return;
+  try {
+    const snap = await getDocs(query(collection(db, 'users'), where('email','==',user.email)));
+    if (!snap.empty) {
+      await updateDoc(snap.docs[0].ref, { ...fields, updatedAt: serverTimestamp() });
+    } else {
+      await addDoc(collection(db, 'users'), {
+        uid: user.uid, email: user.email, role: 'viewer',
+        status: 'active', createdAt: serverTimestamp(), ...fields
+      });
+    }
+  } catch(e) { console.warn('saveProfileToFirestore:', e.message); }
+}
+
+async function uploadAvatarToSupabase(file) {
+  const user = auth.currentUser; if (!user) return null;
+  try {
+    const ext  = file.name.split('.').pop() || 'jpg';
+    const path = 'avatars/' + user.uid + '.' + ext;
+    await getSupabase().storage.from(SUPABASE_BUCKET).remove([path]);
+    const { error } = await getSupabase().storage.from(SUPABASE_BUCKET).upload(path, file, {
+      cacheControl: '3600', upsert: true, contentType: file.type
+    });
+    if (error) throw error;
+    const { data } = getSupabase().storage.from(SUPABASE_BUCKET).getPublicUrl(path);
+    return data.publicUrl + '?t=' + Date.now();
+  } catch(e) { console.warn('uploadAvatarToSupabase:', e.message); return null; }
+}
+
+function initProfileSection() {
+  // Save text fields → Firestore + localStorage
+  document.getElementById('saveProfileBtn')?.addEventListener('click', async () => {
+    const btn   = document.getElementById('saveProfileBtn');
+    const name  = document.getElementById('profileNameInput')?.value.trim();
+    const brand = document.getElementById('profileFavBrand')?.value.trim();
+    const bio   = document.getElementById('profileBio')?.value.trim();
+    if (btn) { btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Saving...'; }
+    await saveProfileToFirestore({ displayName:name, favBrand:brand, bio });
+    const saved = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+    localStorage.setItem('pretrack_profile', JSON.stringify({ ...saved, displayName:name, favBrand:brand, bio }));
+    syncTopbarAvatar();
+    renderProfile();
+    if (btn) { btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-floppy-disk"></i> Save Changes'; }
+    showToast?.('Profile saved!', 'success');
+  });
+
+  // Avatar upload → Supabase + Firestore URL
+  document.getElementById('profileAvatarInput')?.addEventListener('change', async function() {
+    const file = this.files?.[0]; if (!file) return;
+    const ini  = document.getElementById('profileAvatarInitials');
+    const prev = ini?.textContent;
+    if (ini) ini.textContent = '...';
+    const url = await uploadAvatarToSupabase(file);
+    if (url) {
+      await saveProfileToFirestore({ avatarUrl: url });
+      const saved = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+      localStorage.setItem('pretrack_profile', JSON.stringify({ ...saved, avatarUrl: url }));
+      syncTopbarAvatar(); renderProfile();
+      showToast?.('Avatar updated!', 'success');
+    } else {
+      // Fallback: base64 localStorage only
+      const reader = new FileReader();
+      reader.onload = e => {
+        const b64   = e.target.result;
+        const saved = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+        localStorage.setItem('pretrack_profile', JSON.stringify({ ...saved, avatarUrl: b64 }));
+        syncTopbarAvatar(); renderProfile();
+      };
+      reader.readAsDataURL(file);
+      if (ini) ini.textContent = prev;
     }
   });
 }
+
+
+
+/* ══════════════════════════════════════ STATS ══════════════════════════════════════ */
+  try {
+    const snap = await getDocs(query(collection(db, 'users'), where('email', '==', user.email)));
+    if (snap.empty) {
+      await addDoc(collection(db, 'users'), {
+        uid: user.uid, email: user.email,
+        role: 'viewer', status: 'active', createdAt: serverTimestamp()
+      });
+    } else {
+      const d = snap.docs[0].data();
+      if (!d.uid || d.uid !== user.uid) await updateDoc(snap.docs[0].ref, { uid: user.uid });
+    }
+  } catch(e) { console.warn('ensureUserProfile:', e.message); }
+}
+
+/* ══════════════════════════════════════ INIT DASHBOARD ══════════════════════════════════════ */
+function initDashboard() {
+
+function initSharedUI(){
+  const sidebar=document.getElementById('sidebar'),mainWrap=document.getElementById('mainWrap');
+  const sidebarToggle=document.getElementById('sidebarToggle'),sidebarOverlay=document.getElementById('sidebarOverlay');
+  const isMobile=()=>window.innerWidth<=900;
+  sidebarToggle?.addEventListener('click',()=>{
+    if(isMobile()){const o=sidebar.classList.contains('mobile-open');sidebar.classList.toggle('mobile-open',!o);sidebarOverlay?.classList.toggle('show',!o);document.body.style.overflow=o?'':'hidden';}
+    else{sidebar.classList.toggle('collapsed');mainWrap?.classList.toggle('expanded');}
+  });
+  sidebarOverlay?.addEventListener('click',()=>{sidebar.classList.remove('mobile-open');sidebarOverlay.classList.remove('show');document.body.style.overflow='';});
+  const logout=async()=>{try{await signOut(auth);window.location.href='../../login.html';}catch(e){showToast('Logout failed','warning');}};
+  document.getElementById('logoutBtn')?.addEventListener('click',logout);
+  document.getElementById('ddLogout')?.addEventListener('click',logout);
+  document.getElementById('topbarAddBtn')?.addEventListener('click',()=>{window.location.href='add-order.html';});
+  document.getElementById('ddGoProfile')?.addEventListener('click',()=>{window.location.href='profile.html';});
+  document.getElementById('ddGoSettings')?.addEventListener('click',()=>{window.location.href='settings.html';});
+  const isAdmin=auth.currentUser?.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
+  document.querySelectorAll('.admin-only').forEach(el=>el.style.display=isAdmin?'':'none');
+  initTopbarDropdown();
+  initGlobalSearch();
+}
+
+async function bootPage(onReady){
+  onAuthStateChanged(auth,async user=>{
+    if(!user){window.location.href='../../login.html';return;}
+    _currentUser=user;
+    const isSA=user.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
+    if(isSA){setText('profileName','Super Admin');setText('profileRole','Super Admin');}
+    else{
+      try{
+        const snap=await getDocs(query(collection(db,'users'),where('email','==',user.email)));
+        if(!snap.empty){
+          const d=snap.docs[0].data();
+          setText('profileName',d.name?.trim()||user.email);
+          const rm={super_admin:'Super Admin',admin:'Admin',editor:'Editor',viewer:'User'};
+          setText('profileRole',rm[d.role]||'User');
+        }else{setText('profileName',user.email);setText('profileRole','User');}
+      }catch(e){setText('profileName',user.email);}
+    }
+    await loadProfileFromFirestore();
+    initSharedUI();
+    await onReady(user,isSA);
+  });
+}
+function renderUsers() {
+  const tbody      = document.getElementById('usersTableBody');
+  const mobileList = document.getElementById('mobileUserList');
+  if (!tbody && !mobileList) return;
+
+  const users = DB.users || [];
+
+  if (!users.length) {
+    if (tbody)      tbody.innerHTML      = `<tr><td colspan="4" class="empty-row"><i class="fa-solid fa-inbox"></i> No users found</td></tr>`;
+    if (mobileList) mobileList.innerHTML = `<div class="empty-state">No users found</div>`;
+    return;
+  }
+
+  /* ── DESKTOP TABLE (4 columns: Name/Email, Role, Status, Actions) ── */
+  if (tbody) {
+    tbody.innerHTML = users.map(u => `
+      <tr>
+        <td>
+          <div style="display:flex;align-items:center;gap:.75rem">
+            <div class="user-mobile-avatar"><i class="fa-solid fa-user"></i></div>
+            <div>
+              <div style="font-weight:700">${escHtml(u.name||u.email)}</div>
+              <div style="font-size:.75rem;color:var(--text-muted)">${escHtml(u.email)}</div>
+            </div>
+          </div>
+        </td>
+        <td><span class="role-pill">${escHtml(formatRole(u.role))}</span></td>
+        <td>
+          <span class="status-pill-sm ${u.status==='disabled'?'disabled':'active'}">
+            ${u.status==='disabled'?'Disabled':'Active'}
+          </span>
+        </td>
+        <td>
+          <div style="display:flex;gap:.4rem;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" onclick="editUser('${u.id}')">
+              <i class="fa-solid fa-pen"></i> Edit
+            </button>
+            <button class="btn btn-ghost btn-sm"
+                    onclick="toggleUserStatus('${u.id}','${u.status||'active'}')">
+              ${u.status==='disabled'
+                ? '<i class="fa-solid fa-unlock"></i> Enable'
+                : '<i class="fa-solid fa-ban"></i> Disable'}
+            </button>
+            <button class="btn btn-danger btn-sm"
+                    onclick="removeUser('${u.id}','${escHtml(u.email)}')">
+              <i class="fa-solid fa-trash"></i>
+            </button>
+          </div>
+        </td>
+      </tr>`).join('');
+  }
+
+  /* ── MOBILE CARDS ── */
+  if (mobileList) {
+    mobileList.innerHTML = users.map(u => `
+      <div class="user-mobile-card glass">
+        <div class="user-mobile-top">
+          <div class="user-mobile-avatar"><i class="fa-solid fa-user"></i></div>
+          <div class="user-mobile-meta">
+            <div class="user-mobile-name">${escHtml(u.name||u.email)}</div>
+            <div class="user-mobile-email">${escHtml(u.email)}</div>
+          </div>
+        </div>
+        <div class="user-mobile-grid">
+          <div class="user-mobile-field">
+            <div class="user-mobile-label">Role</div>
+            <div class="user-mobile-value">${escHtml(formatRole(u.role))}</div>
+          </div>
+          <div class="user-mobile-field">
+            <div class="user-mobile-label">Status</div>
+            <div class="user-mobile-value">
+              <span class="status-pill-sm ${u.status==='disabled'?'disabled':'active'}">
+                ${u.status==='disabled'?'Disabled':'Active'}
+              </span>
+            </div>
+          </div>
+        </div>
+        <div class="user-mobile-actions">
+          <button class="btn btn-ghost btn-sm" onclick="editUser('${u.id}')">
+            <i class="fa-solid fa-pen"></i> Edit
+          </button>
+          <button class="btn btn-ghost btn-sm"
+                  onclick="toggleUserStatus('${u.id}','${u.status||'active'}')">
+            ${u.status==='disabled'
+              ? '<i class="fa-solid fa-unlock"></i> Enable'
+              : '<i class="fa-solid fa-ban"></i> Disable'}
+          </button>
+          <button class="btn btn-danger btn-sm"
+                  onclick="removeUser('${u.id}','${escHtml(u.email)}')">
+            <i class="fa-solid fa-trash"></i>
+          </button>
+        </div>
+      </div>`).join('');
+  }
+}
+
+function formatRole(role) {
+  return { super_admin:'Super Admin', admin:'Admin', editor:'Editor', viewer:'User' }[role] || 'User';
+}
+
+/* ══════════════════════════════════════ ACCESS REQUESTS ══════════════════════════════════════ */
+function renderAccessRequests() {
+══════════════════════════════════════════════════════════════════ */
+function ensureEditUserModal() {
+  if (document.getElementById('editUserModal')) return;
+  const modal = document.createElement('div');
+  modal.id        = 'editUserModal';
+  modal.className = 'modal-overlay hidden';
+  modal.innerHTML = `
+    <div class="modal-box glass" style="max-width:480px;width:100%">
+      <div class="modal-header">
+        <h2 style="display:flex;align-items:center;gap:.5rem">
+          <i class="fa-solid fa-user-pen"></i> Edit User
+        </h2>
+        <button class="modal-close-btn" id="euClose"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div style="padding:1.5rem;display:flex;flex-direction:column;gap:1.1rem">
+        <input type="hidden" id="euId" />
+
+        <div class="form-group">
+          <label class="form-label">Display Name</label>
+          <input type="text" id="euName" class="form-control" placeholder="Full name" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">
+            Email
+            <span style="color:var(--text-muted);font-size:.75rem;font-weight:400">(read-only)</span>
+          </label>
+          <input type="email" id="euEmail" class="form-control"
+                 disabled style="opacity:.55;cursor:not-allowed" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Role</label>
+          <select id="euRole" class="form-control">
+            <option value="viewer">User — view only</option>
+            <option value="editor">Editor — add &amp; edit</option>
+            <option value="admin">Admin — full access</option>
+            <option value="super_admin">Super Admin</option>
+          </select>
+          <p id="euRoleDesc" style="font-size:.75rem;color:var(--text-muted);margin-top:.35rem"></p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Account Status</label>
+          <select id="euStatus" class="form-control">
+            <option value="active">Active</option>
+            <option value="disabled">Disabled</option>
+          </select>
+        </div>
+
+        <div style="border-top:1px solid var(--border,rgba(255,255,255,.1));padding-top:1.1rem">
+          <label class="form-label" style="margin-bottom:.6rem;display:flex;align-items:center;gap:.4rem">
+            <i class="fa-solid fa-key" style="color:var(--primary)"></i> Password Reset
+          </label>
+          <button id="euResetBtn" class="btn btn-ghost" style="width:100%;justify-content:center">
+            <i class="fa-solid fa-envelope"></i>&nbsp; Send Password Reset Email
+          </button>
+          <p style="font-size:.73rem;color:var(--text-muted);margin-top:.4rem;text-align:center">
+            A secure reset link will be emailed to the user. You cannot set passwords directly from the client.
+          </p>
+        </div>
+
+        <div id="euFeedback" style="font-size:.82rem;min-height:1.2rem;text-align:center"></div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:.75rem;justify-content:flex-end;
+                                        padding:.9rem 1.5rem;
+                                        border-top:1px solid var(--border,rgba(255,255,255,.1))">
+        <button class="btn btn-ghost" id="euCancel">Cancel</button>
+        <button class="btn btn-primary" id="euSave">
+          <i class="fa-solid fa-floppy-disk"></i> Save Changes
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  /* role description helper */
+  const roleDescs = {
+    viewer:      '👁 Can only view orders — no add/edit',
+    editor:      '✏️ Can add and edit orders',
+    admin:       '⚙️ Full access, cannot manage users',
+    super_admin: '👑 Full access including user management'
+  };
+  document.getElementById('euRole').addEventListener('change', e => {
+    document.getElementById('euRoleDesc').textContent = roleDescs[e.target.value] || '';
+  });
+
+  function setFeedback(msg, isError = false) {
+    const el = document.getElementById('euFeedback');
+    if (!el) return;
+    el.textContent  = msg;
+    el.style.color  = isError ? 'var(--red,#ef4444)' : 'var(--green,#22c55e)';
+  }
+
+  function closeEditModal() {
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+    setFeedback('');
+  }
+
+  document.getElementById('euClose').addEventListener('click',  closeEditModal);
+  document.getElementById('euCancel').addEventListener('click', closeEditModal);
+  modal.addEventListener('click', e => { if (e.target === modal) closeEditModal(); });
+
+  /* Send password reset email */
+  document.getElementById('euResetBtn').addEventListener('click', async () => {
+    const email = document.getElementById('euEmail').value;
+    if (!email) return;
+    const btn = document.getElementById('euResetBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending…';
+    setFeedback('');
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setFeedback(`✓ Reset email sent to ${email}`);
+      showToast('Password reset email sent!', 'success');
+    } catch(e) {
+      setFeedback('Could not send reset email: ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-envelope"></i>&nbsp; Send Password Reset Email';
+    }
+  });
+
+  /* Save name / role / status */
+  document.getElementById('euSave').addEventListener('click', async () => {
+    const docId  = document.getElementById('euId').value;
+    const name   = document.getElementById('euName').value.trim();
+    const role   = document.getElementById('euRole').value;
+    const status = document.getElementById('euStatus').value;
+    const btn    = document.getElementById('euSave');
+    if (!docId) return;
+    setFeedback('');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
+    try {
+      await updateDoc(doc(db, 'users', docId), { name, role, status, updatedAt: serverTimestamp() });
+      /* optimistic local update so re-render is instant */
+      const lu = DB.users.find(u => u.id === docId);
+      if (lu) { lu.name = name; lu.role = role; lu.status = status; }
+      showToast('User updated!', 'success');
+      closeEditModal();
+      await fetchData();
+    } catch(e) {
+      setFeedback('Failed to save: ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Changes';
+    }
+  });
+}
+
+window.editUser = function(docId) {
+  ensureEditUserModal();
+  const user = DB.users.find(u => u.id === docId);
+  if (!user) { showToast('User not found', 'warning'); return; }
+  document.getElementById('euId').value     = user.id;
+  document.getElementById('euName').value   = user.name   || '';
+  document.getElementById('euEmail').value  = user.email  || '';
+  document.getElementById('euRole').value   = user.role   || 'viewer';
+  document.getElementById('euStatus').value = user.status || 'active';
+  document.getElementById('euFeedback').textContent = '';
+  const roleDescs = {
+    viewer:'👁 Can only view orders — no add/edit', editor:'✏️ Can add and edit orders',
+    admin:'⚙️ Full access, cannot manage users',   super_admin:'👑 Full access including user management'
+  };
+  const rd = document.getElementById('euRoleDesc');
+  if (rd) rd.textContent = roleDescs[user.role || 'viewer'] || '';
+  document.getElementById('editUserModal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+};
+
+/* ═══════════════════════════════════════════
+   USER STATUS / DELETE — window-exposed
+   FIX: currentStatus now properly received;
+        local DB.users updated immediately;
+        deleteUser alias added
+═══════════════════════════════════════════ */
+window.toggleUserStatus = async function(docId, currentStatus) {
+  const newStatus = currentStatus === 'active' ? 'disabled' : 'active';
+  try {
+    await updateDoc(doc(db, 'users', docId), { status: newStatus, updatedAt: serverTimestamp() });
+    const u = DB.users.find(x => x.id === docId);
+    if (u) u.status = newStatus; // optimistic local update
+    showToast(`User ${newStatus === 'active' ? 'enabled' : 'disabled'}`, 'success');
+    renderUsers();
+  } catch(e) { showToast('Failed to update status: ' + e.message, 'warning'); }
+};
+
+window.removeUser = async function(docId, email) {
+  if (!confirm(`Remove ${email} from PreTrack?\n\nThis removes their profile. Their Firebase Auth account stays.`)) return;
+  try {
+    await deleteDoc(doc(db, 'users', docId));
+    DB.users = DB.users.filter(u => u.id !== docId); // optimistic local update
+    showToast('User removed', 'success');
+    renderUsers();
+  } catch(e) { showToast('Failed to remove user: ' + e.message, 'warning'); }
+};
+
+window.deleteUser = window.removeUser; // ← alias: HTML that calls deleteUser() still works
+
+/* ══════════════════════════════════════ FIRESTORE ══════════════════════════════════════ */
+
+bootPage(async(user,isSA)=>{
+  await fetchData();
+  renderUsers();renderAccessRequests();
+});

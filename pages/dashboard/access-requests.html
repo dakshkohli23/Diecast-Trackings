@@ -4,22 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PreTrack — Access Requests</title>
-  <link rel="stylesheet" href="../../assets/css/style.css" />
   <link rel="manifest" href="../../pwa/manifest.json" />
   <meta name="theme-color" content="#7c5cfc" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="PreTrack" />
-  
-  
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@400;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="../../assets/css/style.css" />
 </head>
-<body class="dashboard-body" data-page="access-requests">
+<body class="dashboard-body">
 
-  <!-- ═══════════════ SIDEBAR ═══════════════ -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="brand-icon"><i class="fa-solid fa-car-side"></i></div>
@@ -30,22 +25,22 @@
     </div>
     <nav class="sidebar-nav">
       <div class="nav-group-label">MAIN</div>
-      <a href="index.html" class="nav-item" data-page="dashboard" data-tooltip="Dashboard"><i class="fa-solid fa-gauge-high"></i><span>Dashboard</span></a>
-      <a href="collection.html" class="nav-item" data-page="collection" data-tooltip="Collection"><i class="fa-solid fa-car-side"></i><span>Collection</span></a>
-      <a href="catalog.html" class="nav-item" data-page="catalog" data-tooltip="Catalog"><i class="fa-solid fa-shop"></i><span>Catalog</span></a>
-      <a href="brands.html" class="nav-item" data-page="brands" data-tooltip="Brands"><i class="fa-solid fa-building"></i><span>Brands</span></a>
-      <a href="sellers.html" class="nav-item" data-page="sellers" data-tooltip="Sellers"><i class="fa-solid fa-store"></i><span>Sellers</span></a>
-      <a href="add-order.html" class="nav-item" data-page="add-order" data-tooltip="Add Order"><i class="fa-solid fa-circle-plus"></i><span>Add Order</span></a>
-      <a href="calendar.html" class="nav-item" data-page="calendar" data-tooltip="ETA Calendar"><i class="fa-solid fa-calendar-days"></i><span>Calendar</span></a>
-      <a href="upcoming.html" class="nav-item" data-page="upcoming" data-tooltip="Upcoming Deliveries"><i class="fa-solid fa-truck-fast"></i><span>Upcoming</span><span class="nav-badge" id="upcomingBadge" style="display:none"></span></a>
+      <a href="index.html" class="nav-item" data-section="dashboard" data-tooltip="Dashboard"><i class="fa-solid fa-gauge-high"></i><span>Dashboard</span></a>
+      <a href="collection.html" class="nav-item" data-section="orders" data-tooltip="Collection"><i class="fa-solid fa-car-side"></i><span>Collection</span></a>
+      <a href="add-order.html" class="nav-item" data-section="add-order" data-tooltip="Add Order"><i class="fa-solid fa-circle-plus"></i><span>Add Order</span></a>
+      <a href="catalog.html" class="nav-item" data-section="catalog" data-tooltip="Catalog"><i class="fa-solid fa-shop"></i><span>Catalog</span></a>
+      <a href="brands.html" class="nav-item" data-section="brands" data-tooltip="Brands"><i class="fa-solid fa-building"></i><span>Brands</span></a>
+      <a href="sellers.html" class="nav-item" data-section="sellers" data-tooltip="Sellers"><i class="fa-solid fa-store"></i><span>Sellers</span></a>
+      <a href="calendar.html" class="nav-item" data-section="calendar" data-tooltip="Calendar"><i class="fa-solid fa-calendar-days"></i><span>Calendar</span></a>
+      <a href="upcoming.html" class="nav-item" data-section="upcoming" data-tooltip="Upcoming"><i class="fa-solid fa-truck-fast"></i><span>Upcoming</span></a>
       <div class="nav-group-label">REPORTS</div>
-      <a href="analytics.html" class="nav-item" data-page="analytics" data-tooltip="Analytics"><i class="fa-solid fa-chart-area"></i><span>Analytics</span></a>
+      <a href="analytics.html" class="nav-item" data-section="analytics" data-tooltip="Analytics"><i class="fa-solid fa-chart-area"></i><span>Analytics</span></a>
       <div class="nav-group-label">SYSTEM</div>
-      <a href="payments.html" class="nav-item" data-page="payments" data-tooltip="Payments"><i class="fa-solid fa-wallet"></i><span>Payments</span></a>
-      <a href="users.html" class="nav-item admin-only" data-page="users" data-tooltip="Users"><i class="fa-solid fa-users-gear"></i><span>Users</span></a>
-      <a href="access-requests.html" class="nav-item admin-only" data-page="access-requests" data-tooltip="Access Requests" style="display:none"><i class="fa-solid fa-user-clock"></i><span>Access Requests</span><span class="nav-badge" id="accessRequestsBadge" style="display:none"></span></a>
-      <a href="settings.html" class="nav-item" data-page="settings" data-tooltip="Settings"><i class="fa-solid fa-sliders"></i><span>Settings</span></a>
-      <a href="profile.html" class="nav-item" data-page="profile" data-tooltip="Profile"><i class="fa-solid fa-circle-user"></i><span>Profile</span></a>
+      <a href="payments.html" class="nav-item" data-section="payments" data-tooltip="Payments"><i class="fa-solid fa-wallet"></i><span>Payments</span></a>
+      <a href="users.html" class="nav-item admin-only" data-section="users" data-tooltip="Users" style="display:none"><i class="fa-solid fa-users-gear"></i><span>Users</span></a>
+      <a href="access-requests.html" class="nav-item active admin-only" data-section="access-requests" data-tooltip="Access Requests" style="display:none"><i class="fa-solid fa-user-clock"></i><span>Access Requests</span></a>
+      <a href="settings.html" class="nav-item" data-section="settings" data-tooltip="Settings"><i class="fa-solid fa-sliders"></i><span>Settings</span></a>
+      <a href="profile.html" class="nav-item" data-section="profile" data-tooltip="Profile"><i class="fa-solid fa-circle-user"></i><span>Profile</span></a>
     </nav>
     <div class="sidebar-footer">
       <button class="nav-item logout-btn" id="logoutBtn" data-tooltip="Logout">
@@ -53,24 +48,16 @@
       </button>
     </div>
   </aside>
-
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
-  <!-- ═══════════════ MAIN CONTENT ═══════════════ -->
   <div class="main-wrap" id="mainWrap">
-
-    <!-- TOPBAR -->
     <header class="topbar">
       <div class="topbar-left">
         <button class="sidebar-toggle" id="sidebarToggle"><i class="fa-solid fa-bars"></i></button>
-        <button class="gs-trigger" id="gsTrigger">
-          <i class="fa-solid fa-magnifying-glass"></i><span>Search everything...</span><kbd>/</kbd>
-        </button>
+        <button class="gs-trigger" id="gsTrigger"><i class="fa-solid fa-magnifying-glass"></i><span>Search everything...</span><kbd>/</kbd></button>
       </div>
       <div class="topbar-right" style="position:relative">
-        <button class="btn btn-primary topbar-add-btn" id="topbarAddBtn">
-          <i class="fa-solid fa-plus"></i> <span class="topbar-add-label">Add Order</span>
-        </button>
+        <button class="btn btn-primary topbar-add-btn" id="topbarAddBtn"><i class="fa-solid fa-plus"></i> <span class="topbar-add-label">Add Order</span></button>
         <div class="topbar-profile" id="topbarProfileBtn">
           <div class="topbar-avatar" id="topbarAvatar">
             <img id="topbarAvatarImg" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%" />
@@ -88,10 +75,7 @@
               <img id="topbarDdAvatarImg" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%" />
               <span id="topbarDdInitials"><i class="fa-solid fa-user"></i></span>
             </div>
-            <div>
-              <div class="topbar-dd-name" id="topbarDdName">Admin</div>
-              <div class="topbar-dd-email" id="topbarDdEmail">—</div>
-            </div>
+            <div><div class="topbar-dd-name" id="topbarDdName">Admin</div><div class="topbar-dd-email" id="topbarDdEmail">—</div></div>
           </div>
           <div class="topbar-dd-divider"></div>
           <button class="topbar-dd-item" id="ddGoProfile"><i class="fa-solid fa-circle-user"></i> My Profile</button>
@@ -101,43 +85,74 @@
         </div>
       </div>
     </header>
-
-    <!-- Global Search Overlay -->
     <div class="gs-overlay hidden" id="gsOverlay">
       <div class="gs-modal" id="gsModal">
-        <div class="gs-input-row">
-          <i class="fa-solid fa-magnifying-glass gs-icon"></i>
-          <input type="text" id="gsInput" class="gs-input" placeholder="Search models, brands, sellers..." autocomplete="off" spellcheck="false" />
-          <kbd class="gs-esc">Esc</kbd>
-        </div>
-        <div class="gs-body" id="gsBody"><div class="gs-empty"><i class="fa-solid fa-magnifying-glass"></i><span>Type to search your collection</span></div></div>
-        <div class="gs-footer">
-          <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
-          <span><kbd>↵</kbd> open</span>
-          <span><kbd>Esc</kbd> close</span>
-        </div>
+        <div class="gs-input-row"><i class="fa-solid fa-magnifying-glass gs-icon"></i><input type="text" id="gsInput" class="gs-input" placeholder="Search models, brands, sellers..." autocomplete="off" /><kbd class="gs-esc">Esc</kbd></div>
+        <div class="gs-body" id="gsBody"><div class="gs-empty"><i class="fa-solid fa-magnifying-glass"></i><span>Type to search</span></div></div>
+        <div class="gs-footer"><span><kbd>↑</kbd><kbd>↓</kbd></span><span><kbd>↵</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
       </div>
     </div>
-
     <div class="toast-container" id="toastContainer"></div>
 
     <main class="page-content" id="pageContent">
-      <!-- Section content -->
       <section class="section active" id="section-access-requests">
-        <!-- Populated by access-requests.js -->
-        <div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Access Requests</h2>
+            <p class="section-sub">People requesting to join PreTrack from the login page</p>
+          </div>
+          <button class="btn btn-ghost" id="refreshAccessRequestsBtn">
+            <i class="fa-solid fa-rotate-right"></i> Refresh
+          </button>
+        </div>
+
+        <!-- Stats row -->
+        <div class="ar-stats-row">
+          <div class="ar-stat glass">
+            <div class="ar-stat-icon ar-pending-icon"><i class="fa-solid fa-hourglass-half"></i></div>
+            <div>
+              <div class="ar-stat-val" id="arCountPending">0</div>
+              <div class="ar-stat-label">Pending</div>
+            </div>
+          </div>
+          <div class="ar-stat glass">
+            <div class="ar-stat-icon ar-approved-icon"><i class="fa-solid fa-circle-check"></i></div>
+            <div>
+              <div class="ar-stat-val" id="arCountApproved">0</div>
+              <div class="ar-stat-label">Approved</div>
+            </div>
+          </div>
+          <div class="ar-stat glass">
+            <div class="ar-stat-icon ar-rejected-icon"><i class="fa-solid fa-circle-xmark"></i></div>
+            <div>
+              <div class="ar-stat-val" id="arCountRejected">0</div>
+              <div class="ar-stat-label">Rejected</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Filter tabs -->
+        <div class="ar-tab-bar">
+          <button class="ar-tab active" data-filter="all"><i class="fa-solid fa-list"></i> All</button>
+          <button class="ar-tab" data-filter="pending"><i class="fa-solid fa-hourglass-half"></i> Pending</button>
+          <button class="ar-tab" data-filter="approved"><i class="fa-solid fa-circle-check"></i> Approved</button>
+          <button class="ar-tab" data-filter="rejected"><i class="fa-solid fa-circle-xmark"></i> Rejected</button>
+        </div>
+
+        <!-- Requests list -->
+        <div class="ar-list glass" id="accessRequestsList">
+          <div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i> Loading requests...</div>
+        </div>
       </section>
     </main>
   </div>
 
-  <script src="../../config/config.js"></script>
+
+
+    <script src="../../config/config.js"></script>
   <script type="module" src="../../assets/js/pages/access-requests.js"></script>
   <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/Diecast-Trackings/pwa/sw.js').catch(() => {});
-      });
-    }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/Diecast-Trackings/pwa/sw.js').catch(()=>{});
   </script>
 </body>
 </html>

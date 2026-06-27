@@ -1,636 +1,2215 @@
-/**
- * PreTrack — Collection Page
- * Full order grid with grid/list toggle, filters, add/edit/delete modal.
- */
+'use strict';
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-app.js";
+import { getAuth, signOut, onAuthStateChanged, createUserWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-auth.js";
+import { getFirestore, collection, addDoc, getDocs, doc, updateDoc, deleteDoc, query, where, serverTimestamp } from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
+import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm";
 
-import { requireAuth }       from '../auth/auth-guard.js';
-import { db, uploadImageToSupabase, deleteImageFromSupabase } from '../services/firebase.js';
-import {
-  initSidebar, initTopbarDropdown, initGlobalSearch, syncTopbarAvatar,
-  applyRoleVisibility, showToast, setText, escHtml, formatDate, formatINR
-} from './dashboard-shell.js';
-import {
-  getDocs, addDoc, updateDoc, deleteDoc,
-  collection, doc, query, orderBy, serverTimestamp
-} from "https://www.gstatic.com/firebasejs/12.11.0/firebase-firestore.js";
-
-async function injectComponents() {
-  const [s, t] = await Promise.all([
-    fetch('../../components/sidebar.html').then(r => r.text()),
-    fetch('../../components/navbar.html').then(r => r.text()),
-  ]);
-  document.getElementById('sidebar-root').innerHTML = s;
-  document.getElementById('topbar-root').innerHTML  = t;
+const _cfg = (typeof window !== 'undefined' && window.__PRETRACK_CONFIG__) || {};
+const firebaseConfig = {
+  apiKey: _cfg.firebase?.apiKey||'', authDomain: _cfg.firebase?.authDomain||'',
+  projectId: _cfg.firebase?.projectId||'', storageBucket: _cfg.firebase?.storageBucket||'',
+  messagingSenderId: _cfg.firebase?.messagingSenderId||'', appId: _cfg.firebase?.appId||'',
+};
+let _currentUser=null, _authReady=false;
+const app=initializeApp(firebaseConfig), auth=getAuth(app), db=getFirestore(app);
+const secondaryApp=initializeApp(firebaseConfig,'secondary'), secondaryAuth=getAuth(secondaryApp);
+const SUPER_ADMIN=_cfg.superAdmin||'dlaize@dlaize.com';
+const SUPABASE_URL=_cfg.supabase?.url||'', SUPABASE_ANON_KEY=_cfg.supabase?.anonKey||'', SUPABASE_BUCKET='order-images';
+let _supabase=null;
+function getSupabase(){if(_supabase)return _supabase;if(!SUPABASE_URL)throw new Error('Supabase not configured');_supabase=createClient(SUPABASE_URL,SUPABASE_ANON_KEY);return _supabase;}
+  const ext  = file.name.split('.').pop() || 'jpg';
+  const path = `orders/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
+  const { error } = await getSupabase().storage.from(SUPABASE_BUCKET).upload(path, file, { cacheControl: '3600', upsert: false });
+  if (error) throw new Error(`Supabase upload failed: ${error.message}`);
+  const { data } = getSupabase().storage.from(SUPABASE_BUCKET).getPublicUrl(path);
+  return data.publicUrl;
 }
 
-/* ── State ── */
-let orders       = [];
-let filteredOrders = [];
-let viewMode     = 'grid'; // 'grid' | 'list'
-let currentEdit  = null;
-let currentImageFile = null;
-let customBrands = [];
+async function deleteImageFromSupabase(imageUrl) {
+  if (!imageUrl || !imageUrl.includes(SUPABASE_URL)) return;
+  const marker = `/object/public/${SUPABASE_BUCKET}/`;
+  const idx    = imageUrl.indexOf(marker);
+  if (idx === -1) return;
+  const filePath = decodeURIComponent(imageUrl.slice(idx + marker.length).split('?')[0]);
+  const { error } = await getSupabase().storage.from(SUPABASE_BUCKET).remove([filePath]);
+  if (error) console.warn('Supabase delete failed:', error.message);
+}
 
+/* ══ APP STATE ══ */
+let DB = { orders: [], activity: [], accessRequests: [], users: [] };
+let _currentImageFile = null;
+let _currentImageB64  = '';
+let _authReady        = false;
+
+/* ══════════════════════════════════════════════════════════════════
+   BRAND STATE — module-level so both fetchData() and initDashboard()
+   can read/write without closure issues
+══════════════════════════════════════════════════════════════════ */
 const BASE_BRANDS = ['Hot Wheels','Mini GT','Pop Race','Tarmac Works','Tomica','Matchbox','Kaido House','Inno64'];
+let customBrands  = [];
+
 function getAllBrands() { return [...BASE_BRANDS, ...customBrands]; }
 
-/* ── Boot ── */
-(async () => {
-  await injectComponents();
-  const { user, role } = await requireAuth();
-  initSidebar();
-  initTopbarDropdown(user);
-  applyRoleVisibility(role);
-  syncTopbarAvatar({ email: user.email, role });
-
-  buildPageHTML();
-  await fetchOrders();
-  initFilters();
-  initViewToggle();
-  initModal();
-  initGlobalSearch(() => orders);
-
-  // Check for highlight param (from global search)
-  const params = new URLSearchParams(window.location.search);
-  const highlightId = params.get('highlight');
-  if (highlightId) setTimeout(() => highlightOrder(highlightId), 500);
-})();
-
-/* ── Build Page HTML ── */
-function buildPageHTML() {
-  document.getElementById('section-collection').innerHTML = `
-    <div class="section-header">
-      <div>
-        <h2 class="section-title">Collection</h2>
-        <p class="section-sub">All orders, preorders &amp; inventory</p>
-      </div>
-      <button class="btn btn-primary" id="addOrderBtn"><i class="fa-solid fa-plus"></i> Add Model</button>
-    </div>
-
-    <div class="filters-bar glass">
-      <div class="filter-search">
-        <i class="fa-solid fa-magnifying-glass"></i>
-        <input type="text" id="invSearch" placeholder="Search name, brand..." />
-      </div>
-      <select id="invFilterBrand" class="filter-select"><option value="">All Brands</option></select>
-      <select id="invFilterStatus" class="filter-select">
-        <option value="">All Statuses</option>
-        <option>Ordered</option><option>In Transit</option><option>Delivered</option><option>Cancelled</option>
-      </select>
-      <select id="invFilterScale" class="filter-select">
-        <option value="">All Scales</option>
-        <option>1:64</option><option>1:43</option><option>1:18</option><option>1:24</option><option>1:12</option><option>Other</option>
-      </select>
-      <select id="invSort" class="filter-select">
-        <option value="newest">Newest</option>
-        <option value="name-az">Name A–Z</option>
-        <option value="name-za">Name Z–A</option>
-        <option value="price-hi">Price High</option>
-        <option value="price-lo">Price Low</option>
-      </select>
-      <button class="btn btn-ghost" id="invClearFilters"><i class="fa-solid fa-xmark"></i></button>
-    </div>
-
-    <div class="col-toolbar">
-      <span class="col-count" id="colCount">0 models</span>
-      <div class="col-view-toggle">
-        <button class="col-view-btn active" id="viewBtnGrid" title="Grid view"><i class="fa-solid fa-grip"></i></button>
-        <button class="col-view-btn" id="viewBtnList" title="List view"><i class="fa-solid fa-list"></i></button>
-      </div>
-    </div>
-
-    <div id="colGridView" class="col-grid"></div>
-
-    <div id="colListView" class="table-wrap glass" style="display:none;overflow-x:auto">
-      <table class="orders-table">
-        <thead><tr><th>Product</th><th>Brand</th><th>Status</th><th>Qty</th><th>Total</th><th>Pending</th><th>ETA</th><th>Actions</th></tr></thead>
-        <tbody id="ordersTableBody"></tbody>
-      </table>
-    </div>
-
-    <!-- ADD/EDIT MODAL -->
-    <div class="modal-overlay hidden" id="orderModal">
-      <div class="modal modal-redesign glass" id="orderModalBox">
-        <div class="modal-header">
-          <div class="modal-header-left">
-            <div class="modal-header-icon"><i class="fa-solid fa-car-side"></i></div>
-            <div>
-              <h3 id="modalTitle">Add New Order</h3>
-              <p class="modal-header-sub">Fill in the required fields below</p>
-            </div>
-          </div>
-          <button class="modal-close" id="modalClose"><i class="fa-solid fa-xmark"></i></button>
-        </div>
-        <div class="modal-body">
-          <form id="orderForm">
-            <input type="hidden" id="editOrderId" />
-            <div class="form-section">
-              <div class="form-section-label"><i class="fa-solid fa-star"></i> Required</div>
-              <div class="form-grid-new">
-                <div class="form-group fg-full">
-                  <label class="fg-label"><i class="fa-solid fa-tag"></i> Product Name <span class="fg-required">*</span></label>
-                  <input type="text" id="fProductName" class="fg-input" placeholder="e.g. Nissan Skyline GT-R R34" required />
-                </div>
-                <div class="form-group fg-half">
-                  <label class="fg-label"><i class="fa-solid fa-building"></i> Brand <span class="fg-required">*</span></label>
-                  <select id="fBrandSelect" class="fg-input fg-select" required>
-                    <option value="">Select Brand</option>
-                    <option value="__new__">＋ Add New Brand</option>
-                  </select>
-                  <input type="hidden" id="fBrand" />
-                  <div class="new-brand-row hidden" id="newBrandRow">
-                    <input type="text" id="fNewBrand" class="fg-input" placeholder="Enter new brand name..." />
-                    <button type="button" class="btn-add-brand" id="confirmNewBrand"><i class="fa-solid fa-check"></i> Add</button>
-                    <button type="button" class="btn-cancel-brand" id="cancelNewBrand"><i class="fa-solid fa-xmark"></i></button>
-                  </div>
-                </div>
-                <div class="form-group fg-quarter">
-                  <label class="fg-label"><i class="fa-solid fa-boxes-stacked"></i> Qty <span class="fg-required">*</span></label>
-                  <input type="number" id="fQty" class="fg-input" min="1" value="1" required />
-                </div>
-                <div class="form-group fg-quarter">
-                  <label class="fg-label"><i class="fa-solid fa-calendar-plus"></i> Order Date</label>
-                  <input type="date" id="fOrderDate" class="fg-input" />
-                </div>
-                <div class="form-group fg-quarter">
-                  <label class="fg-label"><i class="fa-solid fa-calendar-check"></i> ETA Date</label>
-                  <input type="date" id="fEta" class="fg-input" />
-                </div>
-                <div class="form-group fg-full">
-                  <label class="fg-label"><i class="fa-solid fa-circle-dot"></i> Status</label>
-                  <div class="status-pill-group" id="statusPillGroup">
-                    <label class="status-pill active" data-status="Ordered"><input type="radio" name="fStatusRadio" value="Ordered" checked hidden /><i class="fa-solid fa-cart-shopping"></i> Ordered</label>
-                    <label class="status-pill" data-status="In Transit"><input type="radio" name="fStatusRadio" value="In Transit" hidden /><i class="fa-solid fa-truck-moving"></i> In Transit</label>
-                    <label class="status-pill" data-status="Delivered"><input type="radio" name="fStatusRadio" value="Delivered" hidden /><i class="fa-solid fa-box-open"></i> Delivered</label>
-                    <label class="status-pill" data-status="Cancelled"><input type="radio" name="fStatusRadio" value="Cancelled" hidden /><i class="fa-solid fa-ban"></i> Cancelled</label>
-                  </div>
-                  <input type="hidden" id="fStatus" value="Ordered" />
-                </div>
-              </div>
-            </div>
-
-            <div class="form-section">
-              <div class="form-section-label"><i class="fa-solid fa-wallet"></i> Payment</div>
-              <div class="form-grid-new">
-                <div class="form-group fg-quarter"><label class="fg-label"><i class="fa-solid fa-tag"></i> Pre Order Amt (₹)</label><input type="number" id="fPreorderPrice" class="fg-input" min="0" value="0" /></div>
-                <div class="form-group fg-quarter"><label class="fg-label"><i class="fa-solid fa-indian-rupee-sign"></i> Buy Price/piece (₹)</label><input type="number" id="fActualPrice" class="fg-input" min="0" value="0" /></div>
-                <div class="form-group fg-quarter"><label class="fg-label"><i class="fa-solid fa-truck"></i> Shipping (₹)</label><input type="number" id="fShipping" class="fg-input" min="0" value="0" /></div>
-                <div class="form-group fg-quarter"><label class="fg-label"><i class="fa-solid fa-hand-holding-dollar"></i> Total Paid (₹)</label><input type="number" id="fPaid" class="fg-input" min="0" value="0" /></div>
-                <div class="form-group fg-half"><label class="fg-label"><i class="fa-solid fa-calculator"></i> Total (auto)</label><div class="fg-calc-field" id="fTotalDisplay">₹0</div><input type="hidden" id="fTotal" /></div>
-                <div class="form-group fg-half"><label class="fg-label"><i class="fa-solid fa-hourglass-half"></i> Pending (auto)</label><div class="fg-calc-field fg-calc-pending" id="fPendingDisplay">₹0</div><input type="hidden" id="fPending" /></div>
-              </div>
-            </div>
-
-            <details class="form-section form-section-optional">
-              <summary class="form-section-label form-section-toggle">
-                <i class="fa-solid fa-ellipsis"></i> Optional Details
-                <i class="fa-solid fa-chevron-down toggle-chevron"></i>
-              </summary>
-              <div class="form-grid-new" style="margin-top:1rem">
-                <div class="form-group fg-half"><label class="fg-label"><i class="fa-solid fa-barcode"></i> Order / Tracking #</label><input type="text" id="fOrderNumber" class="fg-input" placeholder="e.g. TRK-123456" /></div>
-                <div class="form-group fg-quarter"><label class="fg-label"><i class="fa-solid fa-ruler"></i> Scale</label><select id="fScale" class="fg-input fg-select"><option>1:64</option><option>1:43</option><option>1:18</option><option>1:24</option><option>1:12</option><option>Other</option></select></div>
-                <div class="form-group fg-quarter"><label class="fg-label"><i class="fa-solid fa-cube"></i> Variant</label><select id="fVariant" class="fg-input fg-select"><option>Box</option><option>Blister</option><option>Other</option></select></div>
-                <div class="form-group fg-half"><label class="fg-label"><i class="fa-solid fa-store"></i> Seller Name</label><input type="text" id="fVendor" class="fg-input" placeholder="e.g. Karz & Dolls" /></div>
-                <div class="form-group fg-full"><label class="fg-label"><i class="fa-solid fa-note-sticky"></i> Notes</label><textarea id="fNotes" class="fg-input fg-textarea" rows="2"></textarea></div>
-              </div>
-            </details>
-
-            <div class="form-section">
-              <div class="form-section-label"><i class="fa-solid fa-image"></i> Photo</div>
-              <div class="image-upload-area" id="imageUploadArea">
-                <div class="image-preview" id="imagePreview">
-                  <i class="fa-solid fa-camera"></i><p>Click to upload photo</p><span>JPG, PNG, WEBP · max 5MB</span>
-                </div>
-                <input type="file" id="fImage" accept="image/*" hidden />
-              </div>
-            </div>
-
-            <div class="modal-footer">
-              <button type="button" class="btn btn-ghost" id="modalCancel"><i class="fa-solid fa-xmark"></i> Cancel</button>
-              <button type="submit" class="btn btn-primary" id="modalSave"><i class="fa-solid fa-floppy-disk"></i> Save Order</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </div>
-
-    <!-- VIEW MODAL -->
-    <div class="modal-overlay hidden" id="viewModal">
-      <div class="modal-view-new glass" id="viewModalBox"></div>
-    </div>
-  `;
+function rebuildDropdown(selectEl, selectedVal) {
+  if (!selectEl) return;
+  while (selectEl.options.length) selectEl.remove(0);
+  const ph = document.createElement('option');
+  ph.value = ''; ph.textContent = 'Select Brand';
+  selectEl.appendChild(ph);
+  getAllBrands().forEach(b => {
+    const o = document.createElement('option'); o.value = b; o.textContent = b;
+    selectEl.appendChild(o);
+  });
+  const nw = document.createElement('option');
+  nw.value = '__new__'; nw.textContent = '＋ Add New Brand';
+  selectEl.appendChild(nw);
+  if (selectedVal) selectEl.value = selectedVal;
 }
 
-/* ── Fetch ── */
-async function fetchOrders() {
+function rebuildAllBrandDropdowns(selectedVal) {
+  rebuildDropdown(document.getElementById('fBrandSelect'), selectedVal);
+  rebuildDropdown(document.getElementById('pBrandSelect'), selectedVal);
+}
+
+async function fetchData() {
+  // Warn if secrets not injected but continue anyway
+  if (firebaseConfig.apiKey.startsWith('__')) {
+    console.error('WARNING: Firebase credentials not injected by GitHub Actions.');
+  }
+
   try {
-    const snap = await getDocs(query(collection(db, 'orders'), orderBy('createdAt', 'desc')));
-    orders = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    // Collect custom brands
-    const known = new Set(BASE_BRANDS);
-    customBrands = [...new Set(orders.map(o => o.brand).filter(b => b && !known.has(b)))];
-    populateBrandFilter();
-    applyFilters();
-  } catch (e) {
-    showToast('Failed to load orders', 'error');
+    const user = auth.currentUser;
+    if (!user) return;
+    const currentEmail = (user.email || '').toLowerCase().trim();
+    const isAdmin      = currentEmail === SUPER_ADMIN.toLowerCase().trim();
+
+    // Wrap each fetch individually — one failure won't kill everything
+    const safeGet = async (ref) => {
+      try { return await getDocs(ref); }
+      catch(e) { console.warn('Fetch failed:', e.code, e.message); return { docs: [] }; }
+    };
+
+    const [ordSnap, actSnap, brnSnap] = await Promise.all([
+      safeGet(collection(db, 'orders')),
+      safeGet(collection(db, 'activity')),
+      safeGet(collection(db, 'brands')),
+    ]);
+
+    const arsSnap = isAdmin ? await safeGet(collection(db, 'access_requests')) : { docs: [] };
+    const usrSnap = isAdmin ? await safeGet(collection(db, 'users'))           : { docs: [] };
+
+    DB.orders = ordSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    // Fix incorrect totals in memory + Firestore silently
+    DB.orders.forEach(o => {
+      const unit    = (parseFloat(o.actual_price) > 0 ? parseFloat(o.actual_price) : parseFloat(o.preorder_price)) || 0;
+      const qty     = parseInt(o.quantity) || 1;
+      const ship    = parseFloat(o.shipping) || 0;
+      const paid    = parseFloat(o.paid) || 0;
+      const correct = (unit * qty) + ship;
+      const pend    = Math.max(0, correct - paid);
+      if (Math.abs((o.total||0) - correct) > 1) {
+        o.total   = correct;
+        o.pending = pend;
+        updateDoc(doc(db, 'orders', o.id), { total: correct, pending: pend })
+          .catch(e => console.warn('Fix order:', o.id, e.message));
+      }
+    });
+
+    DB.activity = actSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    customBrands = brnSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .map(b => b.name)
+      .filter(Boolean);
+    rebuildAllBrandDropdowns();
+
+    DB.accessRequests = isAdmin
+      ? arsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      : [];
+
+    DB.users = isAdmin
+      ? usrSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      : [];
+
+    console.log(`fetchData: ${DB.orders.length} orders loaded`);
+    renderAll();
+
+  } catch(err) {
+    console.error('fetchData fatal error:', err);
+    DB = { orders: [], activity: [], accessRequests: [], users: [] };
+    renderAll();
+    showToast('Error loading data: ' + (err.code || err.message), 'warning');
   }
 }
 
-/* ── Filters ── */
-function initFilters() {
-  ['invSearch','invFilterBrand','invFilterStatus','invFilterScale','invSort'].forEach(id => {
-    document.getElementById(id)?.addEventListener('input', applyFilters);
-    document.getElementById(id)?.addEventListener('change', applyFilters);
-  });
-  document.getElementById('invClearFilters')?.addEventListener('click', () => {
-    ['invSearch','invFilterBrand','invFilterStatus','invFilterScale'].forEach(id => {
-      const el = document.getElementById(id); if (el) el.value = '';
+async function addActivity(type, msg) {
+  const user = auth.currentUser;
+  try {
+    await addDoc(collection(db, 'activity'), {
+      type, msg, time: new Date().toLocaleString(),
+      createdAt:  serverTimestamp(),
+      ownerUid:   user?.uid   || '',
+      ownerEmail: user?.email || ''
     });
-    applyFilters();
+  } catch(e) { console.error('addActivity error:', e); }
+}
+
+function setText(id, val) { const el=document.getElementById(id); if(el) el.textContent=val; }
+function escHtml(str='')  { return String(str).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'); }
+function formatDate(s)    { if(!s) return '—'; const d=new Date(s); return isNaN(d)?s:d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}); }
+
+function showToast(message, type='info') {
+  let t = document.getElementById('globalToast');
+  if (!t) {
+    t = document.createElement('div'); t.id = 'globalToast';
+    Object.assign(t.style, { position:'fixed', right:'20px', bottom:'20px', zIndex:'9999',
+      padding:'12px 16px', borderRadius:'12px', color:'#fff', fontSize:'14px', fontWeight:'600',
+      boxShadow:'0 10px 30px rgba(0,0,0,.25)', transition:'all .25s ease',
+      transform:'translateY(20px)', opacity:'0' });
+    document.body.appendChild(t);
+  }
+  t.style.background = { success:'linear-gradient(135deg,#22c55e,#14b8a6)', warning:'linear-gradient(135deg,#f97316,#ef4444)', info:'linear-gradient(135deg,#7c5cfc,#6366f1)' }[type] || 'linear-gradient(135deg,#7c5cfc,#6366f1)';
+  t.textContent = message;
+  requestAnimationFrame(() => { t.style.transform='translateY(0)'; t.style.opacity='1'; });
+  clearTimeout(window.__toastTimer);
+  window.__toastTimer = setTimeout(() => { t.style.transform='translateY(20px)'; t.style.opacity='0'; }, 2500);
+}
+function initGreeting() {
+  async function getDisplayName() {
+    const user = auth.currentUser; if (!user) return 'there';
+    if (user.email?.toLowerCase() === SUPER_ADMIN.toLowerCase()) return 'Super Admin';
+    try {
+      const snap = await getDocs(query(collection(db, 'users'), where('email', '==', user.email)));
+      if (!snap.empty) { const d = snap.docs[0].data(); if (d.name?.trim()) return d.name.trim(); }
+    } catch(e) { /* fallback */ }
+    return (user.email || '').split('@')[0] || 'there';
+  }
+  function update(name) {
+    const h    = new Date().getHours();
+    const msgs = h < 5
+      ? ['Still up? Dedication. 🌙', 'Night owl mode. 🦉', 'The collection never sleeps. 🌙']
+      : h < 12
+      ? ['Ready to track. ☕', 'New day, new models. 🏎️', 'Collection check time. 📦']
+      : h < 17
+      ? ['Keep the fleet growing. 🚗', 'Midday collection check. 📊', 'Any new arrivals? 📬']
+      : h < 21
+      ? ['Evening patrol. 🌆', 'End of day review. 📋', 'How\'s the collection today? 🏎️']
+      : ['Night shift. 🌙', 'Late night tracking. 🔦', 'One last check. 🌙'];
+    const msg = msgs[Math.floor(Math.random() * msgs.length)];
+
+    const gt = document.getElementById('greetingText');
+    if (gt) gt.innerHTML = `<span style="color:var(--primary);font-weight:900">${escHtml(name)}</span> — ${msg}`;
+
+    const gd = document.getElementById('greetingDate');
+    if (gd) gd.textContent = new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+
+    // Sync avatar in hero
+    const saved   = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+    const avatUrl = saved.avatarUrl || '';
+    const initials= name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2) || 'DA';
+    const hImg = document.getElementById('dashHeroAvatarImg');
+    const hIni = document.getElementById('dashHeroAvatarIni');
+    if (avatUrl && hImg) { hImg.src=avatUrl; hImg.style.display='block'; if(hIni) hIni.style.display='none'; }
+    else { if(hImg) hImg.style.display='none'; if(hIni) { hIni.style.display='flex'; hIni.textContent=initials; } }
+
+    // Hero stats
+    const fmt = v => '₹'+Number(v||0).toLocaleString('en-IN');
+    const today = new Date(); today.setHours(0,0,0,0);
+    const in7   = new Date(today); in7.setDate(today.getDate()+7);
+    const due   = DB.orders.reduce((s,o)=>s+(o.pending||0),0);
+    const week  = DB.orders.filter(o=>{
+      if (!o.eta||o.status==='Delivered'||o.status==='Cancelled') return false;
+      const d=new Date(o.eta); d.setHours(0,0,0,0); return d>=today&&d<=in7;
+    }).length;
+    setText('dhStatModels', DB.orders.length);
+    setText('dhStatDue',    fmt(due));
+    setText('dhStatEta',    week + ' orders');
+  }
+  function checkSys() {
+    const ss = document.getElementById('systemStatus'); if (!ss) return;
+    ss.innerHTML = `<span class="status-dot"></span> Checking systems…`; ss.className = 'system-status';
+    setTimeout(() => { ss.innerHTML = `<span class="status-dot"></span> All systems live`; ss.className = 'system-status live'; }, 1200);
+  }
+  getDisplayName().then(name => { update(name); setInterval(() => update(name), 60000); });
+  checkSys();
+}
+
+function updateHeroStats() {
+  const fmt   = v => '₹' + Number(v||0).toLocaleString('en-IN');
+  const today = new Date(); today.setHours(0,0,0,0);
+  const in7   = new Date(today); in7.setDate(today.getDate()+7);
+  const due   = DB.orders.reduce((s,o)=>s+(o.pending||0),0);
+  const week  = DB.orders.filter(o=>{
+    if(!o.eta||o.status==='Delivered'||o.status==='Cancelled') return false;
+    const d=new Date(o.eta); d.setHours(0,0,0,0); return d>=today&&d<=in7;
+  }).length;
+  setText('dhStatModels', DB.orders.length);
+  setText('dhStatDue',    fmt(due));
+  setText('dhStatEta',    week + (week===1?' order':' orders'));
+  // Sync avatar in hero bar
+  const saved    = JSON.parse(localStorage.getItem('pretrack_profile')||'{}');
+  const user     = auth.currentUser;
+  const isAdmin  = user?.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
+  const name     = saved.displayName||(isAdmin?'Super Admin':user?.email?.split('@')[0]||'DA');
+  const initials = name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2)||'DA';
+  const hImg = document.getElementById('dashHeroAvatarImg');
+  const hIni = document.getElementById('dashHeroAvatarIni');
+  if(saved.avatarUrl&&hImg){hImg.src=saved.avatarUrl;hImg.style.display='block';if(hIni)hIni.style.display='none';}
+  else{if(hImg)hImg.style.display='none';if(hIni){hIni.style.display='flex';hIni.textContent=initials;}}
+}
+
+function renderAll() {
+  renderStats();
+  applyCollectionFilters();
+  populateBrandFilter();
+  renderRecentOrders();
+  renderEtaWidget();
+  renderActivityFeed();
+  renderAlerts();
+  renderPayments();
+  renderAnalytics();
+  renderBrandLeaderboard();
+  renderWeekArrivals();
+  if (typeof renderCatalog === 'function') renderCatalog();
+  renderSellers();
+  renderUpcoming();
+  renderUsers();
+  renderAccessRequests();
+  renderCalendar();
+  renderBrands();
+  renderSettingsInfo();
+  renderProfile();
+  syncTopbarAvatar();
+  updateHeroStats();
+  const ss = document.getElementById('systemStatus');
+  if (ss) { ss.innerHTML = `<span class="status-dot"></span> All systems live`; ss.className = 'system-status live'; }
+}
+
+function renderSettingsInfo() {
+  const cnt = document.getElementById('settingsModelCount');
+  if (cnt) cnt.textContent = `${DB.orders.length} model${DB.orders.length !== 1 ? 's' : ''}`;
+  const user = auth.currentUser;
+  const emailEl = document.getElementById('settingsUserEmail');
+  if (emailEl && user) emailEl.textContent = user.email || '—';
+}
+
+function renderProfile() {
+  const user    = auth.currentUser; if (!user) return;
+  const orders  = DB.orders;
+  const fmt     = v => '₹' + Number(v||0).toLocaleString('en-IN');
+  const isAdmin = user.email?.toLowerCase() === SUPER_ADMIN.toLowerCase();
+
+  // Load saved profile data
+  const saved     = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+  const name      = saved.displayName || (isAdmin ? 'Super Admin' : user.email?.split('@')[0] || 'User');
+  const favBrand  = saved.favBrand || '';
+  const bio       = saved.bio || '';
+  const avatarUrl = saved.avatarUrl || '';
+
+  // Avatar
+  const initials  = name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+  const avatarImg = document.getElementById('profileAvatarImg');
+  const avatarIni = document.getElementById('profileAvatarInitials');
+  if (avatarUrl && avatarImg) {
+    avatarImg.src = avatarUrl; avatarImg.style.display = 'block';
+    if (avatarIni) avatarIni.style.display = 'none';
+  } else {
+    if (avatarImg) avatarImg.style.display = 'none';
+    if (avatarIni) { avatarIni.style.display = 'flex'; avatarIni.textContent = initials; }
+  }
+
+  // Identity
+  setText('profileDisplayName', name);
+  setText('profileRoleBadge',   (isAdmin ? '⚡ Super Admin' : '👤 User'));
+  setText('profileEmailTag',    user.email || '—');
+  setText('profileSince',       user.metadata?.creationTime ? new Date(user.metadata.creationTime).toLocaleDateString('en-IN',{month:'short',year:'numeric'}) : '—');
+
+  // Quick stats
+  const delivered = orders.filter(o=>o.status==='Delivered').length;
+  const pending   = orders.filter(o=>o.status!=='Delivered'&&o.status!=='Cancelled').length;
+  const totalDue  = orders.reduce((s,o)=>s+(o.pending||0),0);
+  setText('pStatModels',    orders.length);
+  setText('pStatDelivered', delivered);
+  setText('pStatPending',   pending);
+  setText('pStatDue',       fmt(totalDue));
+
+  // Form
+  const nameInput  = document.getElementById('profileNameInput');
+  const emailInput = document.getElementById('profileEmailInput');
+  const brandInput = document.getElementById('profileFavBrand');
+  const bioInput   = document.getElementById('profileBio');
+  if (nameInput)  nameInput.value  = name;
+  if (emailInput) emailInput.value = user.email || '—';
+  if (brandInput) brandInput.value = favBrand;
+  if (bioInput)   bioInput.value   = bio;
+
+  // Account info
+  setText('profileAccEmail', user.email || '—');
+  setText('profileAccUid',   user.uid   || '—');
+  setText('profileAccRole',  isAdmin ? 'Super Admin' : 'User');
+
+  // Collection breakdown by status
+  const statuses = ['Ordered','In Transit','Delivered','Cancelled'];
+  const colors   = ['#4f46e5','#0284c7','#16a34a','#6b7280'];
+  const counts   = statuses.map(s => orders.filter(o=>o.status===s).length);
+  const maxCount = Math.max(...counts, 1);
+  const bdEl = document.getElementById('profileBreakdown');
+  if (bdEl) {
+    bdEl.innerHTML = statuses.map((s,i) => `
+      <div class="profile-breakdown-row">
+        <span class="profile-breakdown-label">${s}</span>
+        <div class="profile-breakdown-bar-wrap">
+          <div class="profile-breakdown-bar" style="width:${Math.round((counts[i]/maxCount)*100)}%;background:${colors[i]}"></div>
+        </div>
+        <span class="profile-breakdown-count">${counts[i]}</span>
+      </div>`).join('');
+  }
+}
+
+function syncTopbarAvatar() {
+  const saved    = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+  const user     = auth.currentUser;
+  const isAdmin  = user?.email?.toLowerCase() === SUPER_ADMIN.toLowerCase();
+  const name     = saved.displayName || (isAdmin ? 'Super Admin' : user?.email?.split('@')[0] || 'User');
+  const initials = name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+  const url      = saved.avatarUrl || '';
+
+  // Topbar small avatar
+  const img = document.getElementById('topbarAvatarImg');
+  const ini = document.getElementById('topbarAvatarInitials');
+  if (url && img) { img.src=url; img.style.display='block'; if(ini) ini.style.display='none'; }
+  else { if(img) img.style.display='none'; if(ini) { ini.style.display='flex'; ini.textContent=initials; } }
+
+  // Dropdown large avatar
+  const ddImg = document.getElementById('topbarDdAvatarImg');
+  const ddIni = document.getElementById('topbarDdInitials');
+  if (url && ddImg) { ddImg.src=url; ddImg.style.display='block'; if(ddIni) ddIni.style.display='none'; }
+  else { if(ddImg) ddImg.style.display='none'; if(ddIni) { ddIni.style.display='flex'; ddIni.textContent=initials; } }
+
+  // Names
+  setText('profileName',  name);
+  setText('profileRole',  isAdmin ? 'Super Admin' : 'User');
+  setText('topbarDdName', name);
+  setText('topbarDdEmail', user?.email || '—');
+}
+
+function initGlobalSearch() {
+  const overlay  = document.getElementById('gsOverlay');
+  const modal    = document.getElementById('gsModal');
+  const input    = document.getElementById('gsInput');
+  const body     = document.getElementById('gsBody');
+  const trigger  = document.getElementById('gsTrigger');
+  if (!overlay || !input) return;
+
+  let activeIdx  = -1;
+  let results    = [];
+
+  function open() {
+    overlay.classList.remove('hidden');
+    input.value = '';
+    body.innerHTML = `<div class="gs-empty"><i class="fa-solid fa-magnifying-glass"></i><span>Type to search your collection</span></div>`;
+    activeIdx = -1; results = [];
+    setTimeout(() => input.focus(), 50);
+  }
+
+  function close() {
+    overlay.classList.add('hidden');
+    input.value = '';
+    activeIdx = -1; results = [];
+  }
+
+  // Open triggers
+  trigger?.addEventListener('click', open);
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && !['INPUT','TEXTAREA'].includes(document.activeElement?.tagName)) {
+      e.preventDefault(); open();
+    }
+    if (e.key === 'Escape') close();
+  });
+
+  // Close on overlay click (outside modal)
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  // Keyboard navigation inside modal
+  input.addEventListener('keydown', e => {
+    const rows = body.querySelectorAll('.gs-result');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeIdx = Math.min(activeIdx + 1, rows.length - 1);
+      rows.forEach((r,i) => r.classList.toggle('gs-active', i === activeIdx));
+      rows[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIdx = Math.max(activeIdx - 1, 0);
+      rows.forEach((r,i) => r.classList.toggle('gs-active', i === activeIdx));
+      rows[activeIdx]?.scrollIntoView({ block: 'nearest' });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const active = body.querySelector('.gs-result.gs-active');
+      if (active) active.click();
+      else if (rows.length) rows[0].click();
+    } else if (e.key === 'Escape') {
+      close();
+    }
+  });
+
+  // Search on input
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase();
+    if (!q) {
+      body.innerHTML = `<div class="gs-empty"><i class="fa-solid fa-magnifying-glass"></i><span>Type to search your collection</span></div>`;
+      activeIdx = -1; return;
+    }
+    doSearch(q);
+  });
+
+  function hl(text, q) {
+    if (!q) return escHtml(text);
+    const safe = escHtml(text);
+    const safeQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return safe.replace(new RegExp('(' + safeQ + ')', 'gi'), '<mark>$1</mark>');
+  }
+
+  function navigateTo(section) {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.querySelector(`.nav-item[data-section="${section}"]`)?.classList.add('active');
+    document.getElementById(`section-${section}`)?.classList.add('active');
+    const sdw = document.getElementById('sellerDetailWrap');
+    const sg  = document.getElementById('sellerGrid');
+    if (sdw && sg) { sdw.classList.remove('visible'); sg.style.display = ''; }
+  }
+
+  function doSearch(q) {
+    const fmt = v => '₹' + Number(v||0).toLocaleString('en-IN');
+    let html  = '';
+
+    // ── MODELS ──
+    const models = DB.orders.filter(o =>
+      (o.product_name||'').toLowerCase().includes(q) ||
+      (o.brand||'').toLowerCase().includes(q) ||
+      (o.scale||'').toLowerCase().includes(q) ||
+      (o.variant||'').toLowerCase().includes(q) ||
+      (o.order_number||'').toString().includes(q)
+    ).slice(0, 8);
+
+    if (models.length) {
+      html += '<div class="gs-section-label"><i class="fa-solid fa-car-side"></i> Models</div>';
+      html += models.map((o,i) => {
+        const sc    = (o.status||'').toLowerCase().replace(/\s+/g,'-');
+        const thumb = o.image
+          ? `<img src="${escHtml(o.image)}" alt="" />`
+          : `<i class="fa-solid fa-car-side"></i>`;
+        return `<div class="gs-result" data-type="order" data-id="${o.id}">
+          <div class="gs-result-thumb">${thumb}</div>
+          <div class="gs-result-info">
+            <div class="gs-result-name">${hl(o.product_name||'—', q)}</div>
+            <div class="gs-result-sub">${escHtml(o.brand||'—')} · ${escHtml(o.scale||'1:64')}${o.vendor?' · '+escHtml(o.vendor):''}</div>
+          </div>
+          <div class="gs-result-right">
+            <span class="badge badge-${sc} gs-result-badge">${escHtml(o.status||'Ordered')}</span>
+            <span class="gs-result-price">${fmt(o.total||0)}</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // ── SELLERS ──
+    const sellers = [...new Set(DB.orders.map(o => o.vendor).filter(Boolean))]
+      .filter(v => v.toLowerCase().includes(q)).slice(0, 4);
+
+    if (sellers.length) {
+      html += '<div class="gs-section-label"><i class="fa-solid fa-store"></i> Sellers</div>';
+      html += sellers.map(s => {
+        const ords  = DB.orders.filter(o => o.vendor === s);
+        const total = ords.reduce((x,o)=>x+(o.total||0),0);
+        return `<div class="gs-result" data-type="seller" data-seller="${escHtml(s)}">
+          <div class="gs-result-thumb" style="background:linear-gradient(135deg,#7c5cfc,#5b3fd4);color:#fff;font-size:.8rem"><i class="fa-solid fa-store"></i></div>
+          <div class="gs-result-info">
+            <div class="gs-result-name">${hl(s, q)}</div>
+            <div class="gs-result-sub">${ords.length} order${ords.length!==1?'s':''}</div>
+          </div>
+          <div class="gs-result-right">
+            <span class="gs-result-price">${fmt(total)}</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    // ── BRANDS ──
+    const brands = [...new Set(DB.orders.map(o => o.brand).filter(Boolean))]
+      .filter(b => b.toLowerCase().includes(q)).slice(0, 4);
+
+    if (brands.length) {
+      html += '<div class="gs-section-label"><i class="fa-solid fa-tag"></i> Brands</div>';
+      html += brands.map(b => {
+        const ords  = DB.orders.filter(o => o.brand === b);
+        const total = ords.reduce((x,o)=>x+(o.total||0),0);
+        return `<div class="gs-result" data-type="brand" data-brand="${escHtml(b)}">
+          <div class="gs-result-thumb" style="background:rgba(124,92,252,0.15);color:#7c5cfc;font-size:.85rem"><i class="fa-solid fa-building"></i></div>
+          <div class="gs-result-info">
+            <div class="gs-result-name">${hl(b, q)}</div>
+            <div class="gs-result-sub">${ords.length} model${ords.length!==1?'s':''} · ${fmt(total)}</div>
+          </div>
+          <div class="gs-result-right">
+            <span style="font-size:.68rem;color:var(--text-muted)">${ords.filter(o=>o.status==='Delivered').length} delivered</span>
+          </div>
+        </div>`;
+      }).join('');
+    }
+
+    if (!models.length && !sellers.length && !brands.length) {
+      html = `<div class="gs-no-results"><i class="fa-solid fa-circle-xmark" style="font-size:1.5rem;opacity:.2;display:block;margin-bottom:.5rem"></i>No results for "<strong>${escHtml(q)}</strong>"</div>`;
+    }
+
+    body.innerHTML = html;
+    activeIdx = -1;
+
+    // Wire up click handlers
+    body.querySelectorAll('.gs-result').forEach(row => {
+      row.addEventListener('click', () => {
+        const type   = row.dataset.type;
+        const id     = row.dataset.id;
+        const seller = row.dataset.seller;
+        const brand  = row.dataset.brand;
+        close();
+        if (type === 'order') {
+          setTimeout(() => window.viewOrder?.(id), 100);
+        } else if (type === 'seller') {
+          navigateTo('sellers');
+          setTimeout(() => window.showSellerDetail?.(seller), 150);
+        } else if (type === 'brand') {
+          navigateTo('brands');
+          setTimeout(() => window.showBrandDetail?.(brand), 150);
+        }
+      });
+    });
+  }
+}
+
+function initTopbarDropdown() {
+  const btn      = document.getElementById('topbarProfileBtn');
+  const dropdown = document.getElementById('topbarDropdown');
+  const chevron  = document.getElementById('topbarChevron');
+  if (!btn || !dropdown) return;
+
+  btn.addEventListener('click', e => {
+    e.stopPropagation();
+    const open = !dropdown.classList.contains('hidden');
+    dropdown.classList.toggle('hidden', open);
+    if (chevron) chevron.style.transform = open ? '' : 'rotate(180deg)';
+    if (!open) syncTopbarAvatar();
+  });
+
+  document.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    if (chevron) chevron.style.transform = '';
+  });
+
+  document.getElementById('ddGoProfile')?.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    if (chevron) chevron.style.transform = '';
+    // Navigate to profile section
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+    document.querySelector('.nav-item[data-section="profile"]')?.classList.add('active');
+    document.getElementById('section-profile')?.classList.add('active');
+    renderProfile();
+  });
+
+  document.getElementById('ddGoSettings')?.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    if (chevron) chevron.style.transform = '';
+    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+    document.querySelector('.nav-item[data-section="settings"]')?.classList.add('active');
+    document.getElementById('section-settings')?.classList.add('active');
+  });
+
+  document.getElementById('ddLogout')?.addEventListener('click', () => {
+    dropdown.classList.add('hidden');
+    document.getElementById('logoutBtn')?.click();
+  });
+
+  // Initial sync
+  syncTopbarAvatar();
+}
+
+/* ══════════════════════════════════════ PROFILE FIRESTORE ══════════════════════════════════════ */
+async function loadProfileFromFirestore() {
+  const user = auth.currentUser; if (!user) return;
+  try {
+    const snap = await getDocs(query(collection(db, 'users'), where('email','==',user.email)));
+    if (!snap.empty) {
+      const data   = snap.docs[0].data();
+      const local  = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+      const merged = {
+        ...local,
+        displayName: data.displayName || local.displayName || '',
+        favBrand:    data.favBrand    || local.favBrand    || '',
+        bio:         data.bio         || local.bio         || '',
+        avatarUrl:   data.avatarUrl   || local.avatarUrl   || '',
+        _docId:      snap.docs[0].id
+      };
+      localStorage.setItem('pretrack_profile', JSON.stringify(merged));
+    }
+  } catch(e) { console.warn('loadProfileFromFirestore:', e.message); }
+}
+
+async function saveProfileToFirestore(fields) {
+  const user = auth.currentUser; if (!user) return;
+  try {
+    const snap = await getDocs(query(collection(db, 'users'), where('email','==',user.email)));
+    if (!snap.empty) {
+      await updateDoc(snap.docs[0].ref, { ...fields, updatedAt: serverTimestamp() });
+    } else {
+      await addDoc(collection(db, 'users'), {
+        uid: user.uid, email: user.email, role: 'viewer',
+        status: 'active', createdAt: serverTimestamp(), ...fields
+      });
+    }
+  } catch(e) { console.warn('saveProfileToFirestore:', e.message); }
+}
+
+async function uploadAvatarToSupabase(file) {
+  const user = auth.currentUser; if (!user) return null;
+  try {
+    const ext  = file.name.split('.').pop() || 'jpg';
+    const path = 'avatars/' + user.uid + '.' + ext;
+    await getSupabase().storage.from(SUPABASE_BUCKET).remove([path]);
+    const { error } = await getSupabase().storage.from(SUPABASE_BUCKET).upload(path, file, {
+      cacheControl: '3600', upsert: true, contentType: file.type
+    });
+    if (error) throw error;
+    const { data } = getSupabase().storage.from(SUPABASE_BUCKET).getPublicUrl(path);
+    return data.publicUrl + '?t=' + Date.now();
+  } catch(e) { console.warn('uploadAvatarToSupabase:', e.message); return null; }
+}
+
+function initProfileSection() {
+  // Save text fields → Firestore + localStorage
+  document.getElementById('saveProfileBtn')?.addEventListener('click', async () => {
+    const btn   = document.getElementById('saveProfileBtn');
+    const name  = document.getElementById('profileNameInput')?.value.trim();
+    const brand = document.getElementById('profileFavBrand')?.value.trim();
+    const bio   = document.getElementById('profileBio')?.value.trim();
+    if (btn) { btn.disabled=true; btn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Saving...'; }
+    await saveProfileToFirestore({ displayName:name, favBrand:brand, bio });
+    const saved = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+    localStorage.setItem('pretrack_profile', JSON.stringify({ ...saved, displayName:name, favBrand:brand, bio }));
+    syncTopbarAvatar();
+    renderProfile();
+    if (btn) { btn.disabled=false; btn.innerHTML='<i class="fa-solid fa-floppy-disk"></i> Save Changes'; }
+    showToast?.('Profile saved!', 'success');
+  });
+
+  // Avatar upload → Supabase + Firestore URL
+  document.getElementById('profileAvatarInput')?.addEventListener('change', async function() {
+    const file = this.files?.[0]; if (!file) return;
+    const ini  = document.getElementById('profileAvatarInitials');
+    const prev = ini?.textContent;
+    if (ini) ini.textContent = '...';
+    const url = await uploadAvatarToSupabase(file);
+    if (url) {
+      await saveProfileToFirestore({ avatarUrl: url });
+      const saved = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+      localStorage.setItem('pretrack_profile', JSON.stringify({ ...saved, avatarUrl: url }));
+      syncTopbarAvatar(); renderProfile();
+      showToast?.('Avatar updated!', 'success');
+    } else {
+      // Fallback: base64 localStorage only
+      const reader = new FileReader();
+      reader.onload = e => {
+        const b64   = e.target.result;
+        const saved = JSON.parse(localStorage.getItem('pretrack_profile') || '{}');
+        localStorage.setItem('pretrack_profile', JSON.stringify({ ...saved, avatarUrl: b64 }));
+        syncTopbarAvatar(); renderProfile();
+      };
+      reader.readAsDataURL(file);
+      if (ini) ini.textContent = prev;
+    }
   });
 }
 
-function populateBrandFilter() {
-  const sel = document.getElementById('invFilterBrand');
-  if (!sel) return;
-  const brands = [...new Set(orders.map(o => o.brand).filter(Boolean))].sort();
-  sel.innerHTML = '<option value="">All Brands</option>' +
-    brands.map(b => `<option>${escHtml(b)}</option>`).join('');
+
+
+/* ══════════════════════════════════════ STATS ══════════════════════════════════════ */
+  try {
+    const snap = await getDocs(query(collection(db, 'users'), where('email', '==', user.email)));
+    if (snap.empty) {
+      await addDoc(collection(db, 'users'), {
+        uid: user.uid, email: user.email,
+        role: 'viewer', status: 'active', createdAt: serverTimestamp()
+      });
+    } else {
+      const d = snap.docs[0].data();
+      if (!d.uid || d.uid !== user.uid) await updateDoc(snap.docs[0].ref, { uid: user.uid });
+    }
+  } catch(e) { console.warn('ensureUserProfile:', e.message); }
 }
 
-function applyFilters() {
-  const search = (document.getElementById('invSearch')?.value || '').toLowerCase();
+/* ══════════════════════════════════════ INIT DASHBOARD ══════════════════════════════════════ */
+function initDashboard() {
+
+function initSharedUI(){
+  const sidebar=document.getElementById('sidebar'),mainWrap=document.getElementById('mainWrap');
+  const sidebarToggle=document.getElementById('sidebarToggle'),sidebarOverlay=document.getElementById('sidebarOverlay');
+  const isMobile=()=>window.innerWidth<=900;
+  sidebarToggle?.addEventListener('click',()=>{
+    if(isMobile()){const o=sidebar.classList.contains('mobile-open');sidebar.classList.toggle('mobile-open',!o);sidebarOverlay?.classList.toggle('show',!o);document.body.style.overflow=o?'':'hidden';}
+    else{sidebar.classList.toggle('collapsed');mainWrap?.classList.toggle('expanded');}
+  });
+  sidebarOverlay?.addEventListener('click',()=>{sidebar.classList.remove('mobile-open');sidebarOverlay.classList.remove('show');document.body.style.overflow='';});
+  const logout=async()=>{try{await signOut(auth);window.location.href='../../login.html';}catch(e){showToast('Logout failed','warning');}};
+  document.getElementById('logoutBtn')?.addEventListener('click',logout);
+  document.getElementById('ddLogout')?.addEventListener('click',logout);
+  document.getElementById('topbarAddBtn')?.addEventListener('click',()=>{window.location.href='add-order.html';});
+  document.getElementById('ddGoProfile')?.addEventListener('click',()=>{window.location.href='profile.html';});
+  document.getElementById('ddGoSettings')?.addEventListener('click',()=>{window.location.href='settings.html';});
+  const isAdmin=auth.currentUser?.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
+  document.querySelectorAll('.admin-only').forEach(el=>el.style.display=isAdmin?'':'none');
+  initTopbarDropdown();
+  initGlobalSearch();
+}
+
+async function bootPage(onReady){
+  onAuthStateChanged(auth,async user=>{
+    if(!user){window.location.href='../../login.html';return;}
+    _currentUser=user;
+    const isSA=user.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
+    if(isSA){setText('profileName','Super Admin');setText('profileRole','Super Admin');}
+    else{
+      try{
+        const snap=await getDocs(query(collection(db,'users'),where('email','==',user.email)));
+        if(!snap.empty){
+          const d=snap.docs[0].data();
+          setText('profileName',d.name?.trim()||user.email);
+          const rm={super_admin:'Super Admin',admin:'Admin',editor:'Editor',viewer:'User'};
+          setText('profileRole',rm[d.role]||'User');
+        }else{setText('profileName',user.email);setText('profileRole','User');}
+      }catch(e){setText('profileName',user.email);}
+    }
+    await loadProfileFromFirestore();
+    initSharedUI();
+    await onReady(user,isSA);
+  });
+}
+function renderStats() {
+  const o = DB.orders, n = o.length;
+  const totalQty   = o.reduce((s,x) => s + (x.quantity||1), 0);
+  const investment = o.reduce((s,x) => s + ((x.actual_price||0)*(x.quantity||1)) + (x.shipping||0), 0);
+  const avgBuy     = totalQty > 0 ? Math.round(investment / totalQty) : 0;
+  const pendingAmt = o.reduce((s,x) => s + (x.pending||0), 0);
+  const pendingPO  = o.filter(x => x.status==='Ordered'||x.status==='In Transit').length;
+  const delivered  = o.filter(x => x.status==='Delivered').length;
+  const transit    = o.filter(x => x.status==='In Transit').length;
+  const overdue    = o.filter(x => x.eta && new Date(x.eta)<new Date() && x.status!=='Delivered' && x.status!=='Cancelled').length;
+  const bm = {}; o.forEach(x => { const k=(x.brand||x.vendor||'—').trim(); bm[k]=(bm[k]||0)+(x.quantity||1); });
+  const topBrand = Object.entries(bm).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—';
+
+  setText('statTotal',      n);
+  setText('statQty',        totalQty);
+  setText('statAvgBuy',     avgBuy > 0 ? '₹'+avgBuy.toLocaleString('en-IN') : '₹0');
+  setText('statInvestment', '₹'+investment.toLocaleString('en-IN'));
+  setText('statPending',    '₹'+pendingAmt.toLocaleString('en-IN'));
+  setText('statPendingPO',  pendingPO);
+  setText('statDelivered',  delivered);
+  setText('statTransit',    transit);
+  setText('statOverdue',    overdue);
+  setText('statTopBrand',   topBrand);
+
+  const pct = x => n > 0 ? Math.min(100, Math.round((x/n)*100)) : 0;
+  const sb  = (id,v) => { const el=document.getElementById(id); if(el) el.style.width=v+'%'; };
+  sb('statDeliveredBar', pct(delivered));
+  sb('statTransitBar',   pct(transit));
+  sb('statPendingPOBar', pct(pendingPO));
+  sb('statOverdueBar',   pct(overdue));
+  sb('statPendingBar',   investment > 0 ? Math.min(100, Math.round((pendingAmt/investment)*100)) : 0);
+
+  const sellerCount = new Set(DB.orders.map(o => (o.vendor||'Unknown').trim())).size;
+  setText('statSellers', sellerCount);
+}
+
+/* ══════════════════════════════════════ FILTERS ══════════════════════════════════════ */
+function applyCollectionFilters() {
+  const q      = (document.getElementById('invSearch')?.value      || '').toLowerCase();
   const brand  = document.getElementById('invFilterBrand')?.value  || '';
   const status = document.getElementById('invFilterStatus')?.value || '';
   const scale  = document.getElementById('invFilterScale')?.value  || '';
   const sort   = document.getElementById('invSort')?.value         || 'newest';
 
-  filteredOrders = orders.filter(o =>
-    (!search || (o.productName||'').toLowerCase().includes(search) || (o.brand||'').toLowerCase().includes(search)) &&
-    (!brand  || o.brand  === brand) &&
-    (!status || o.status === status) &&
-    (!scale  || o.scale  === scale)
-  );
-
-  filteredOrders.sort((a, b) => {
-    if (sort === 'name-az') return (a.productName||'').localeCompare(b.productName||'');
-    if (sort === 'name-za') return (b.productName||'').localeCompare(a.productName||'');
-    if (sort === 'price-hi') return (b.total||0) - (a.total||0);
-    if (sort === 'price-lo') return (a.total||0) - (b.total||0);
-    return 0; // newest = Firestore order
+  let items = DB.orders.filter(o => {
+    const b = o.brand || o.vendor || '';
+    return (!q      || (o.product_name||'').toLowerCase().includes(q) || b.toLowerCase().includes(q) || (o.series||'').toLowerCase().includes(q))
+        && (!brand  || b === brand)
+        && (!status || o.status === status)
+        && (!scale  || o.scale  === scale);
   });
 
-  setText('colCount', `${filteredOrders.length} model${filteredOrders.length !== 1 ? 's' : ''}`);
-  renderGrid();
-  renderTable();
+  if (sort === 'name-az')  items.sort((a,b) => (a.product_name||'').localeCompare(b.product_name||''));
+  if (sort === 'name-za')  items.sort((a,b) => (b.product_name||'').localeCompare(a.product_name||''));
+  if (sort === 'price-hi') items.sort((a,b) => (b.actual_price||0) - (a.actual_price||0));
+  if (sort === 'price-lo') items.sort((a,b) => (a.actual_price||0) - (b.actual_price||0));
+
+  renderTable(items);
 }
 
-/* ── View Toggle ── */
-function initViewToggle() {
-  document.getElementById('viewBtnGrid')?.addEventListener('click', () => setView('grid'));
-  document.getElementById('viewBtnList')?.addEventListener('click', () => setView('list'));
-}
-function setView(mode) {
-  viewMode = mode;
-  document.getElementById('colGridView').style.display = mode === 'grid' ? '' : 'none';
-  document.getElementById('colListView').style.display = mode === 'list' ? '' : 'none';
-  document.getElementById('viewBtnGrid')?.classList.toggle('active', mode === 'grid');
-  document.getElementById('viewBtnList')?.classList.toggle('active', mode === 'list');
+function populateBrandFilter() {
+  const bf = document.getElementById('invFilterBrand'); if (!bf) return;
+  const cur    = bf.value;
+  const brands = [...new Set(DB.orders.map(o => o.brand || o.vendor).filter(Boolean))].sort();
+  bf.innerHTML = `<option value="">All Brands</option>` + brands.map(b => `<option value="${escHtml(b)}">${escHtml(b)}</option>`).join('');
+  bf.value = cur;
 }
 
-/* ── Grid Render ── */
-function renderGrid() {
-  const grid = document.getElementById('colGridView');
-  if (!grid) return;
-  if (!filteredOrders.length) {
-    grid.innerHTML = '<div class="empty-state"><i class="fa-solid fa-inbox"></i> No items found</div>';
+/* ══════════════════════════════════════ TABLE ══════════════════════════════════════ */
+function renderTable(orders) {
+  const tbody    = document.getElementById('ordersTableBody');
+  const gridView = document.getElementById('colGridView');
+  const countEl  = document.getElementById('colCount');
+
+  if (countEl) countEl.textContent = (orders?.length||0) + ' model' + ((orders?.length||0)===1?'':'s');
+
+  const empty = '<div class="empty-state"><i class="fa-solid fa-inbox"></i> No items found</div>';
+
+  if (!orders?.length) {
+    if (gridView) gridView.innerHTML = empty;
+    if (tbody)    tbody.innerHTML    = '<tr><td colspan="8" class="empty-row"><i class="fa-solid fa-inbox"></i> No items found</td></tr>';
     return;
   }
-  grid.innerHTML = filteredOrders.map(o => {
-    const today   = new Date().toISOString().slice(0,10);
-    const isOverdue = o.eta && o.eta < today && o.status !== 'Delivered' && o.status !== 'Cancelled';
-    const statusClass = { Ordered:'status-ordered', 'In Transit':'status-transit', Delivered:'status-delivered', Cancelled:'status-cancelled' }[o.status] || '';
-    return `
-    <div class="col-card glass" data-id="${o.id}" ${isOverdue ? 'style="border-color:rgba(239,68,68,0.3)"' : ''}>
-      <div class="col-card-img">
-        ${o.imageUrl ? `<img src="${escHtml(o.imageUrl)}" alt="${escHtml(o.productName)}" loading="lazy" />` : `<i class="fa-solid fa-car-side"></i>`}
-        ${isOverdue ? '<div class="col-card-overdue-badge"><i class="fa-solid fa-triangle-exclamation"></i> Overdue</div>' : ''}
-      </div>
-      <div class="col-card-body">
-        <div class="col-card-name">${escHtml(o.productName)}</div>
-        <div class="col-card-meta">${escHtml(o.brand||'—')} · ${o.scale||'—'}</div>
-        <div class="col-card-row">
-          <span class="status-badge ${statusClass}">${o.status||'—'}</span>
-          <span class="col-card-price">${formatINR(o.total)}</span>
-        </div>
-        ${o.pending > 0 ? `<div class="col-card-pending">Due: ${formatINR(o.pending)}</div>` : ''}
-      </div>
-      <div class="col-card-actions">
-        <button class="btn btn-ghost btn-sm view-btn" data-id="${o.id}" title="View"><i class="fa-solid fa-eye"></i></button>
-        <button class="btn btn-ghost btn-sm edit-btn" data-id="${o.id}" title="Edit"><i class="fa-solid fa-pen"></i></button>
-        <button class="btn btn-danger btn-sm del-btn" data-id="${o.id}" title="Delete"><i class="fa-solid fa-trash"></i></button>
-      </div>
-    </div>`;
-  }).join('');
 
-  grid.querySelectorAll('.view-btn').forEach(btn => btn.addEventListener('click', e => { e.stopPropagation(); openViewModal(btn.dataset.id); }));
-  grid.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', e => { e.stopPropagation(); openEditModal(btn.dataset.id); }));
-  grid.querySelectorAll('.del-btn').forEach(btn => btn.addEventListener('click', e => { e.stopPropagation(); deleteOrder(btn.dataset.id); }));
-  grid.querySelectorAll('.col-card').forEach(card => card.addEventListener('click', () => openViewModal(card.dataset.id)));
-}
+  const fmt   = function(v) { return '\u20b9' + Number(v||0).toLocaleString('en-IN'); };
+  const today = new Date(); today.setHours(0,0,0,0);
 
-/* ── Table Render ── */
-function renderTable() {
-  const tbody = document.getElementById('ordersTableBody');
-  if (!tbody) return;
-  if (!filteredOrders.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-row"><i class="fa-solid fa-inbox"></i> No items found</td></tr>';
-    return;
+  // ── CARD GRID ──
+  if (gridView) {
+    gridView.innerHTML = orders.map(function(o) {
+      const sc    = (o.status||'').toLowerCase().replace(/\s+/g,'-');
+      const thumb = o.image
+        ? '<img src="' + escHtml(o.image) + '" alt="' + escHtml(o.product_name) + '" />'
+        : '<i class="fa-solid fa-car-side"></i>';
+      const isPaid    = (o.pending||0) <= 0;
+      const isPartial = !isPaid && (o.paid||0) > 0;
+
+      let etaHtml = '';
+      if (o.eta) {
+        const d = Math.ceil((new Date(o.eta) - today) / (1000*60*60*24));
+        var etaCls = '', etaLbl = '';
+        if (o.status==='Delivered')  { etaCls='';        etaLbl='Delivered'; }
+        else if (d < 0)              { etaCls='overdue'; etaLbl=Math.abs(d)+'d overdue'; }
+        else if (d === 0)            { etaCls='soon';    etaLbl='Today!'; }
+        else if (d <= 7)             { etaCls='soon';    etaLbl='in '+d+'d'; }
+        else                         { etaCls='';        etaLbl=formatDate(o.eta); }
+        etaHtml = '<div class="col-card-eta ' + etaCls + '"><i class="fa-solid fa-calendar-days"></i> ' + etaLbl + '</div>';
+      }
+
+      const pendingLabel = isPaid ? '\u2713 Paid' : (fmt(o.pending||0) + ' due');
+
+      return '<div class="col-card" onclick="viewOrder(\'' + o.id + '\')">'
+        + '<div class="col-card-img">' + thumb
+          + '<span class="col-card-badge"><span class="badge badge-' + sc + '" style="font-size:.58rem">' + escHtml(o.status||'Ordered') + '</span></span>'
+          + '<div class="col-card-actions" onclick="event.stopPropagation()">'
+            + '<button class="col-card-action-btn edit" onclick="editOrder(\'' + o.id + '\')" title="Edit"><i class="fa-solid fa-pen"></i></button>'
+            + '<button class="col-card-action-btn del" onclick="deleteOrder(\'' + o.id + '\')" title="Delete"><i class="fa-solid fa-trash"></i></button>'
+          + '</div>'
+        + '</div>'
+        + '<div class="col-card-body">'
+          + '<div class="col-card-name">' + escHtml(o.product_name) + '</div>'
+          + '<div class="col-card-meta">'
+            + '<span>' + escHtml(o.brand||o.vendor||'—') + '</span>'
+            + '<span class="col-card-meta-dot"></span>'
+            + '<span>' + escHtml(o.scale||'1:64') + '</span>'
+            + (o.variant ? '<span class="col-card-meta-dot"></span><span>' + escHtml(o.variant) + '</span>' : '')
+          + '</div>'
+          + etaHtml
+          + '<div class="col-card-footer">'
+            + '<span class="col-card-price">' + fmt(o.total||0) + '</span>'
+            + '<span class="col-card-pending ' + (isPaid?'paid':'due') + '">' + pendingLabel + '</span>'
+          + '</div>'
+        + '</div>'
+      + '</div>';
+    }).join('');
   }
-  tbody.innerHTML = filteredOrders.map(o => {
-    const statusClass = { Ordered:'status-ordered','In Transit':'status-transit',Delivered:'status-delivered',Cancelled:'status-cancelled' }[o.status]||'';
-    return `<tr>
-      <td><strong>${escHtml(o.productName)}</strong></td>
-      <td>${escHtml(o.brand||'—')}</td>
-      <td><span class="status-badge ${statusClass}">${o.status||'—'}</span></td>
-      <td>${o.qty||1}</td>
-      <td>${formatINR(o.total)}</td>
-      <td style="color:${o.pending>0?'#f97316':'#22c55e'}">${formatINR(o.pending)}</td>
-      <td>${formatDate(o.eta)}</td>
-      <td>
-        <button class="btn btn-ghost btn-sm edit-btn" data-id="${o.id}"><i class="fa-solid fa-pen"></i></button>
-        <button class="btn btn-danger btn-sm del-btn" data-id="${o.id}"><i class="fa-solid fa-trash"></i></button>
-      </td>
-    </tr>`;
-  }).join('');
-  tbody.querySelectorAll('.edit-btn').forEach(btn => btn.addEventListener('click', () => openEditModal(btn.dataset.id)));
-  tbody.querySelectorAll('.del-btn').forEach(btn => btn.addEventListener('click', () => deleteOrder(btn.dataset.id)));
+
+  // ── LIST TABLE ──
+  if (tbody) {
+    tbody.innerHTML = orders.map(function(o) {
+      const sc    = (o.status||'').toLowerCase().replace(/\s+/g,'-');
+      const thumb = o.image
+        ? '<img src="' + escHtml(o.image) + '" alt="' + escHtml(o.product_name) + '" />'
+        : '<i class="fa-solid fa-car-side"></i>';
+      const pb = (o.pending||0)<=0 ? 'badge-paid' : ((o.paid||0)>0 ? 'badge-partial' : 'badge-pending-b');
+      const pl = (o.pending||0)<=0 ? 'Paid'       : ((o.paid||0)>0 ? 'Partial'       : 'Pending');
+      return '<tr>'
+        + '<td><div class="order-product-cell"><div class="order-thumb">' + thumb + '</div>'
+          + '<div style="min-width:0"><div class="order-product-name">' + escHtml(o.product_name) + '</div>'
+          + '<div style="font-size:.7rem;opacity:.6;white-space:nowrap">' + escHtml(o.scale||'1:64')
+          + (o.variant ? '<span class="variant-tag">' + escHtml(o.variant) + '</span>' : '')
+          + '</div></div></div></td>'
+        + '<td style="white-space:nowrap">' + escHtml(o.brand||o.vendor||'—') + '</td>'
+        + '<td><span class="badge badge-' + sc + '">' + escHtml(o.status||'Ordered') + '</span></td>'
+        + '<td style="text-align:center">' + (o.quantity||1) + '</td>'
+        + '<td style="white-space:nowrap"><strong>' + fmt(o.total||0) + '</strong></td>'
+        + '<td><span class="badge ' + pb + '" style="font-size:.68rem">' + pl + '</span></td>'
+        + '<td style="font-size:.76rem;color:var(--text-muted);white-space:nowrap">' + (o.eta ? formatDate(o.eta) : '—') + '</td>'
+        + '<td><div class="table-actions">'
+          + '<button class="btn btn-ghost btn-icon" onclick="viewOrder(\'' + o.id + '\')" title="View"><i class="fa-solid fa-eye"></i></button>'
+          + '<button class="btn btn-ghost btn-icon" onclick="editOrder(\'' + o.id + '\')" title="Edit"><i class="fa-solid fa-pen"></i></button>'
+          + '<button class="btn btn-ghost btn-icon" onclick="duplicateOrder(\'' + o.id + '\')" title="Duplicate"><i class="fa-solid fa-copy"></i></button>'
+          + '<button class="btn btn-danger btn-icon" onclick="deleteOrder(\'' + o.id + '\')" title="Delete"><i class="fa-solid fa-trash"></i></button>'
+        + '</div></td>'
+      + '</tr>';
+    }).join('');
+  }
 }
+function initCollectionViewToggle() {
+  const btnGrid = document.getElementById('viewBtnGrid');
+  const btnList = document.getElementById('viewBtnList');
+  const gridV   = document.getElementById('colGridView');
+  const listV   = document.getElementById('colListView');
+  if (!btnGrid || !btnList) return;
+  btnGrid.addEventListener('click', function() {
+    btnGrid.classList.add('active'); btnList.classList.remove('active');
+    gridV.style.display = ''; listV.style.display = 'none';
+  });
+  btnList.addEventListener('click', function() {
+    btnList.classList.add('active'); btnGrid.classList.remove('active');
+    listV.style.display = ''; gridV.style.display = 'none';
+  });
+}
+/* ══════════════════════════════════════ WIDGETS ══════════════════════════════════════ */
+function initDashboard() {
+  const sidebar        = document.getElementById('sidebar');
+  const mainWrap       = document.getElementById('mainWrap');
+  const sidebarToggle  = document.getElementById('sidebarToggle');
+  const sidebarOverlay = document.getElementById('sidebarOverlay');
+  const orderModal     = document.getElementById('orderModal');
+  const isMobile       = () => window.innerWidth <= 900;
 
-/* ── Modal ── */
-function initModal() {
-  document.getElementById('addOrderBtn')?.addEventListener('click', () => openAddModal());
-  document.getElementById('modalClose')?.addEventListener('click', closeModal);
-  document.getElementById('modalCancel')?.addEventListener('click', closeModal);
-  document.getElementById('orderModal')?.addEventListener('click', e => { if (e.target.id === 'orderModal') closeModal(); });
-
-  // Payment auto-calc
-  ['fActualPrice','fQty','fShipping','fPaid'].forEach(id => {
-    document.getElementById(id)?.addEventListener('input', calcPayment);
+  sidebarToggle?.addEventListener('click', () => {
+    if (isMobile()) {
+      const isOpen = sidebar.classList.contains('mobile-open');
+      sidebar.classList.toggle('mobile-open', !isOpen);
+      sidebarOverlay?.classList.toggle('show', !isOpen);
+      document.body.style.overflow = isOpen ? '' : 'hidden';
+    } else {
+      sidebar.classList.toggle('collapsed');
+      mainWrap.classList.toggle('expanded');
+    }
   });
 
-  // Status pills
-  document.querySelectorAll('.status-pill').forEach(pill => {
-    pill.addEventListener('click', () => {
-      document.querySelectorAll('.status-pill').forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-      document.getElementById('fStatus').value = pill.dataset.status;
+  function closeMobileSidebar() {
+    sidebar.classList.remove('mobile-open');
+    sidebarOverlay?.classList.remove('show');
+    document.body.style.overflow = '';
+  }
+  sidebarOverlay?.addEventListener('click', closeMobileSidebar);
+
+  initGreeting();
+
+  /* ── ADMIN GATE ── */
+  const isAdmin = auth.currentUser?.email?.toLowerCase() === SUPER_ADMIN.toLowerCase();
+  if (isAdmin) {
+    document.querySelector('.nav-item[data-section="users"]')?.style.setProperty('display', '');
+    document.querySelector('.nav-item[data-section="access-requests"]')?.style.setProperty('display', '');
+    document.getElementById('openAddUserBtn')?.style.setProperty('display', '');
+    document.getElementById('clearDataBtn')?.style.setProperty('display', '');
+  } else {
+    document.querySelector('.nav-item[data-section="users"]')?.style.setProperty('display', 'none');
+    document.querySelector('.nav-item[data-section="access-requests"]')?.style.setProperty('display', 'none');
+    document.getElementById('openAddUserBtn')?.style.setProperty('display', 'none');
+    document.getElementById('clearDataBtn')?.style.setProperty('display', 'none');
+  }
+
+  /* ── NAV ── */
+  function navigateTo(section) {
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+    document.querySelector(`.nav-item[data-section="${section}"]`)?.classList.add('active');
+    document.getElementById(`section-${section}`)?.classList.add('active');
+    // reset detail views on navigation
+    const sdw = document.getElementById('sellerDetailWrap');
+    const sg  = document.getElementById('sellerGrid');
+    if (sdw && sg) { sdw.classList.remove('visible'); sg.style.display = ''; }
+  }
+  document.querySelectorAll('.nav-item[data-section]').forEach(item => {
+    item.addEventListener('click', e => {
+      e.preventDefault();
+      navigateTo(item.dataset.section);
+      if (isMobile()) { closeMobileSidebar(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    });
+  });
+  document.querySelectorAll('[data-goto]').forEach(el => {
+    el.addEventListener('click', e => { e.preventDefault(); navigateTo(el.dataset.goto); });
+  });
+
+  document.getElementById('brandBackBtn')?.addEventListener('click', () => {
+  document.getElementById('brandsGrid').style.display = '';
+  document.getElementById('brandDetailWrap')?.classList.add('hidden');
+});
+document.getElementById('brandsSortSelect')?.addEventListener('change', renderBrands);
+
+  document.getElementById('logoutBtn')?.addEventListener('click', async () => {
+    try { await signOut(auth); window.location.href = 'login.html'; }
+    catch(e) { showToast('Logout failed', 'warning'); }
+  });
+
+  /* ═══════════════════════════════════════
+     ADD USER MODAL
+     FIX: calls fetchData() after creation
+          so DB.users actually refreshes
+  ═══════════════════════════════════════ */
+  document.getElementById('openAddUserBtn')?.addEventListener('click', () => {
+    document.getElementById('addUserModal')?.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  });
+
+  function closeAddUserModal() {
+    document.getElementById('addUserModal')?.classList.add('hidden');
+    document.body.style.overflow = '';
+    ['newUserEmail','newUserPassword','newUserName'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    const e = document.getElementById('addUserErr'); if (e) e.textContent = '';
+  }
+  document.getElementById('addUserModalClose')?.addEventListener('click', closeAddUserModal);
+  document.getElementById('addUserCancelBtn')?.addEventListener('click',  closeAddUserModal);
+
+  document.getElementById('addUserConfirmBtn')?.addEventListener('click', async () => {
+    const adminCheck = (auth.currentUser?.email || '').toLowerCase().trim() === SUPER_ADMIN.toLowerCase().trim();
+    if (!adminCheck) { showToast('Admin only', 'warning'); return; }
+
+    const email    = document.getElementById('newUserEmail')?.value.trim();
+    const password = document.getElementById('newUserPassword')?.value;
+    const name     = document.getElementById('newUserName')?.value.trim() || '';
+    const role     = document.getElementById('newUserRole')?.value || 'viewer';
+    const errEl    = document.getElementById('addUserErr');
+    const btn      = document.getElementById('addUserConfirmBtn');
+
+    if (errEl) errEl.textContent = '';
+    if (!email || !password) { if (errEl) errEl.textContent = 'Email and password are required'; return; }
+    if (password.length < 6)  { if (errEl) errEl.textContent = 'Password must be at least 6 characters'; return; }
+
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Creating...';
+    try {
+      const cred = await createUserWithEmailAndPassword(secondaryAuth, email, password);
+      await secondaryAuth.signOut();
+      await addDoc(collection(db, 'users'), {
+        uid: cred.user.uid, email, name, role,
+        status: 'active', createdAt: serverTimestamp()
+      });
+      showToast(`User ${email} created!`, 'success');
+      closeAddUserModal();
+      await fetchData(); // ← FIXED: was renderUsers() — DB.users never updated
+    } catch (err) {
+      const msg = err.code === 'auth/email-already-in-use' ? 'Email already in use'
+                : err.code === 'auth/invalid-email'        ? 'Invalid email address'
+                : err.code === 'auth/weak-password'        ? 'Password is too weak (min 6 chars)'
+                : err.message;
+      if (errEl) errEl.textContent = msg;
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-user-plus"></i> Create User';
+    }
+  });
+
+  /* ── TABS ── */
+  document.querySelectorAll('.sellers-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.sellers-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active'); renderSellers();
+    });
+  });
+  document.querySelectorAll('.upcoming-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.upcoming-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active'); renderUpcoming();
+    });
+  });
+  document.querySelectorAll('.ar-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.ar-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active'); renderAccessRequests();
     });
   });
 
-  // Brand new
-  document.getElementById('fBrandSelect')?.addEventListener('change', e => {
-    if (e.target.value === '__new__') {
-      document.getElementById('newBrandRow')?.classList.remove('hidden');
-      document.getElementById('fNewBrand')?.focus();
-    } else {
-      document.getElementById('fBrand').value = e.target.value;
-    }
-  });
-  document.getElementById('confirmNewBrand')?.addEventListener('click', () => {
-    const val = document.getElementById('fNewBrand').value.trim();
-    if (!val) return;
-    if (!customBrands.includes(val)) customBrands.push(val);
-    document.getElementById('fBrand').value = val;
-    rebuildBrandDropdown(val);
-    document.getElementById('newBrandRow')?.classList.add('hidden');
-  });
-  document.getElementById('cancelNewBrand')?.addEventListener('click', () => {
-    document.getElementById('newBrandRow')?.classList.add('hidden');
-    document.getElementById('fBrandSelect').value = '';
+  document.getElementById('refreshAccessRequestsBtn')?.addEventListener('click', async () => {
+    await fetchData(); showToast('Access requests refreshed', 'info');
   });
 
-  // Image upload
+  /* ── GLOBAL SEARCH ── */
+  document.getElementById('globalSearch')?.addEventListener('input', e => {
+    const q = e.target.value.trim();
+    if (q.length > 0) {
+      navigateTo('orders');
+      const s = document.getElementById('invSearch');
+      if (s) { s.value = q; applyCollectionFilters(); }
+    }
+  });
+
+  /* ── COLLECTION FILTERS ── */
+  ['invSearch','invFilterBrand','invFilterStatus','invFilterScale','invSort'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input',  applyCollectionFilters);
+    document.getElementById(id)?.addEventListener('change', applyCollectionFilters);
+  });
+  initCollectionViewToggle();
+  initProfileSection();
+  initTopbarDropdown();
+  initGlobalSearch();
+  document.getElementById('invClearFilters')?.addEventListener('click', () => {
+    ['invSearch','invFilterBrand','invFilterStatus','invFilterScale'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    const sort = document.getElementById('invSort'); if (sort) sort.value = 'newest';
+    applyCollectionFilters();
+  });
+
+  /* ── BRAND STORE ── */
+  async function loadBrandsFromFirestore() {
+    const user         = auth.currentUser;
+    const currentEmail = (user?.email || '').toLowerCase().trim();
+    const isAdm        = currentEmail === SUPER_ADMIN.toLowerCase().trim();
+    try {
+      const snap = await getDocs(collection(db, 'brands'));
+      customBrands = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(b => {
+          const ou = (b.ownerUid   || '').trim();
+          const oe = (b.ownerEmail || '').toLowerCase().trim();
+          if (ou === user?.uid || oe === currentEmail) return true;
+          if (!ou && !oe && isAdm) return true;
+          return false;
+        })
+        .map(b => b.name).filter(Boolean);
+    } catch(e) {
+      customBrands = JSON.parse(localStorage.getItem('pretrack_brands') || '[]');
+    }
+    rebuildAllBrandDropdowns();
+  }
+
+  async function addCustomBrand(name) {
+    if (!name) return false;
+    const normalized = name.trim();
+    if (getAllBrands().map(x => x.toLowerCase().trim()).includes(normalized.toLowerCase())) return false;
+    try {
+      await addDoc(collection(db, 'brands'), {
+        name: normalized, createdAt: serverTimestamp(),
+        ownerUid:   auth.currentUser?.uid   || '',
+        ownerEmail: auth.currentUser?.email || ''
+      });
+      customBrands.push(normalized);
+    } catch(e) {
+      customBrands.push(normalized);
+      localStorage.setItem('pretrack_brands', JSON.stringify(customBrands));
+    }
+    return true;
+  }
+
+  loadBrandsFromFirestore();
+
+  /* ── MODAL BRAND DROPDOWN ── */
+  const brandSelect  = document.getElementById('fBrandSelect');
+  const newBrandRow  = document.getElementById('newBrandRow');
+  const fNewBrand    = document.getElementById('fNewBrand');
+  const fBrandHidden = document.getElementById('fBrand');
+
+  brandSelect?.addEventListener('change', () => {
+    if (brandSelect.value === '__new__') {
+      newBrandRow?.classList.remove('hidden'); fNewBrand?.focus();
+      if (fBrandHidden) fBrandHidden.value = '';
+      brandSelect.value = '';
+    } else {
+      newBrandRow?.classList.add('hidden');
+      if (fBrandHidden) fBrandHidden.value = brandSelect.value;
+    }
+  });
+
+  document.getElementById('confirmNewBrand')?.addEventListener('click', async () => {
+    const name = fNewBrand?.value.trim();
+    if (!name) { showToast('Enter a brand name', 'warning'); return; }
+    const btn = document.getElementById('confirmNewBrand');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>'; }
+    const added = await addCustomBrand(name);
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-check"></i> Add'; }
+    if (added) {
+      rebuildAllBrandDropdowns(name);
+      if (fBrandHidden) fBrandHidden.value = name;
+      if (brandSelect)  brandSelect.value  = name;
+      showToast(`Brand "${name}" saved!`, 'success');
+    } else {
+      showToast(`"${name}" already exists`, 'warning');
+      if (brandSelect)  brandSelect.value  = name;
+      if (fBrandHidden) fBrandHidden.value = name;
+    }
+    newBrandRow?.classList.add('hidden');
+    if (fNewBrand) fNewBrand.value = '';
+  });
+
+  document.getElementById('cancelNewBrand')?.addEventListener('click', () => {
+    newBrandRow?.classList.add('hidden');
+    if (fNewBrand)    fNewBrand.value    = '';
+    if (brandSelect)  brandSelect.value  = '';
+    if (fBrandHidden) fBrandHidden.value = '';
+  });
+
+  /* ── STATUS PILLS ── */
+  document.querySelectorAll('#orderModal .status-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('#orderModal .status-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      const r = pill.querySelector('input[type="radio"]');
+      if (r) { r.checked = true; const fs = document.getElementById('fStatus'); if (fs) fs.value = r.value; }
+    });
+  });
+  document.querySelector('#orderModal .status-pill')?.classList.add('active');
+
+  /* ── ORDER MODAL OPEN/CLOSE ── */
+  function openModal() {
+    orderModal?.classList.remove('hidden');
+    document.body.style.overflow = 'hidden';
+  }
+  function closeModal() {
+    orderModal?.classList.add('hidden');
+    document.body.style.overflow = '';
+    document.getElementById('orderForm')?.reset();
+    const eid = document.getElementById('editOrderId'); if (eid) eid.value = '';
+    const ip  = document.getElementById('imagePreview');
+    if (ip) ip.innerHTML = '<i class="fa-solid fa-camera"></i><p>Click to upload photo</p><span>JPG, PNG, WEBP · max 5MB</span>';
+    const fi = document.getElementById('fImage'); if (fi) fi.value = '';
+    _currentImageFile = null; _currentImageB64 = '';
+    rebuildDropdown(document.getElementById('fBrandSelect'));
+    document.getElementById('newBrandRow')?.classList.add('hidden');
+    const fb = document.getElementById('fBrand'); if (fb) fb.value = '';
+    document.querySelectorAll('#orderModal .status-pill').forEach(p => p.classList.remove('active'));
+    document.querySelector('#orderModal .status-pill')?.classList.add('active');
+    const fs = document.getElementById('fStatus'); if (fs) fs.value = 'Ordered';
+    const td = document.getElementById('fTotalDisplay');   if (td) td.textContent = '₹0';
+    const pd = document.getElementById('fPendingDisplay'); if (pd) { pd.textContent = '₹0'; pd.classList.remove('fg-calc-overdue'); pd.style.color = ''; }
+  }
+
+  /* ── PAYMENT CALC ── */
+  ['fPreorderPrice','fActualPrice','fShipping','fPaid','fQty'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', calcTotals);
+  });
+  function calcTotals() {
+    const price = parseFloat(document.getElementById('fActualPrice')?.value) || 0;
+    const qty   = parseInt(document.getElementById('fQty')?.value)           || 1;
+    const ship  = parseFloat(document.getElementById('fShipping')?.value)    || 0;
+    const paid  = parseFloat(document.getElementById('fPaid')?.value)        || 0;
+    const total = (price * qty) + ship;
+    const diff  = total - paid;
+    const pend  = Math.max(0, diff);
+    const fmt   = v => `₹${v.toLocaleString('en-IN')}`;
+    const td    = document.getElementById('fTotalDisplay');
+    if (td) { td.textContent = fmt(total); td.title = `(₹${price.toLocaleString('en-IN')} × ${qty}) + ₹${ship.toLocaleString('en-IN')} shipping`; }
+    const pd = document.getElementById('fPendingDisplay');
+    if (pd) {
+      if (diff < 0) {
+        pd.textContent = `+₹${Math.abs(diff).toLocaleString('en-IN')}`;
+        pd.classList.remove('fg-calc-overdue'); pd.style.color = 'var(--green, #22c55e)';
+        pd.title = `Overpaid by ₹${Math.abs(diff).toLocaleString('en-IN')}`;
+      } else {
+        pd.textContent = fmt(pend); pd.style.color = '';
+        pd.classList.toggle('fg-calc-overdue', pend > 0); pd.title = '';
+      }
+    }
+    const ftEl = document.getElementById('fTotal');   if (ftEl) ftEl.value = total;
+    const fpEl = document.getElementById('fPending'); if (fpEl) fpEl.value = pend;
+  }
+
+  ['addOrderBtn','quickAddBtn','qaAddOrder','sidebarAddOrder','topbarAddBtn'].forEach(id => {
+    document.getElementById(id)?.addEventListener('click', () => {
+      document.getElementById('modalTitle').textContent = 'Add New Model'; openModal();
+    });
+  });
+  document.getElementById('modalClose')?.addEventListener('click',  closeModal);
+  document.getElementById('modalCancel')?.addEventListener('click', closeModal);
+  orderModal?.addEventListener('click', e => { if (e.target === orderModal) closeModal(); });
+
+  const viewModal = document.getElementById('viewModal');
+  document.getElementById('viewModalClose')?.addEventListener('click', () => {
+    viewModal?.classList.add('hidden'); document.body.style.overflow = '';
+  });
+  viewModal?.addEventListener('click', e => {
+    if (e.target === viewModal) { viewModal.classList.add('hidden'); document.body.style.overflow = ''; }
+  });
+
+  /* ── IMAGE UPLOAD ── */
   document.getElementById('imageUploadArea')?.addEventListener('click', () => document.getElementById('fImage')?.click());
   document.getElementById('fImage')?.addEventListener('change', e => {
-    const file = e.target.files[0];
-    if (!file) return;
-    currentImageFile = file;
+    const file = e.target.files[0]; if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { showToast('Image too large (max 5MB)', 'warning'); return; }
+    _currentImageFile = file;
     const reader = new FileReader();
     reader.onload = ev => {
-      document.getElementById('imagePreview').innerHTML = `<img src="${ev.target.result}" style="width:100%;height:100%;object-fit:cover;border-radius:8px" />`;
+      _currentImageB64 = ev.target.result;
+      const p = document.getElementById('imagePreview');
+      if (p) p.innerHTML = `<img src="${_currentImageB64}" alt="preview" />`;
     };
     reader.readAsDataURL(file);
   });
 
-  // Form submit
-  document.getElementById('orderForm')?.addEventListener('submit', saveOrder);
-
-  // Close view modal
-  document.getElementById('viewModal')?.addEventListener('click', e => { if (e.target.id === 'viewModal') document.getElementById('viewModal').classList.add('hidden'); });
-
-  rebuildBrandDropdown('');
-}
-
-function rebuildBrandDropdown(selected) {
-  const sel = document.getElementById('fBrandSelect');
-  if (!sel) return;
-  sel.innerHTML = `<option value="">Select Brand</option>` +
-    getAllBrands().map(b => `<option value="${escHtml(b)}" ${b === selected ? 'selected' : ''}>${escHtml(b)}</option>`).join('') +
-    `<option value="__new__">＋ Add New Brand</option>`;
-}
-
-function openAddModal() {
-  currentEdit = null; currentImageFile = null;
-  document.getElementById('modalTitle').textContent = 'Add New Order';
-  document.getElementById('orderForm').reset();
-  document.getElementById('fStatus').value = 'Ordered';
-  document.getElementById('fTotalDisplay').textContent = '₹0';
-  document.getElementById('fPendingDisplay').textContent = '₹0';
-  document.getElementById('imagePreview').innerHTML = `<i class="fa-solid fa-camera"></i><p>Click to upload photo</p><span>JPG, PNG, WEBP · max 5MB</span>`;
-  document.querySelectorAll('.status-pill').forEach(p => p.classList.toggle('active', p.dataset.status === 'Ordered'));
-  rebuildBrandDropdown('');
-  document.getElementById('fOrderDate').value = new Date().toISOString().slice(0,10);
-  document.getElementById('orderModal').classList.remove('hidden');
-}
-
-function openEditModal(id) {
-  const order = orders.find(o => o.id === id);
-  if (!order) return;
-  currentEdit = order; currentImageFile = null;
-  document.getElementById('modalTitle').textContent = 'Edit Order';
-  document.getElementById('editOrderId').value = id;
-
-  setValue('fProductName', order.productName);
-  setValue('fQty', order.qty || 1);
-  setValue('fOrderDate', order.orderDate || '');
-  setValue('fEta', order.eta || '');
-  setValue('fPreorderPrice', order.preorderPrice || 0);
-  setValue('fActualPrice', order.actualPrice || 0);
-  setValue('fShipping', order.shipping || 0);
-  setValue('fPaid', order.paid || 0);
-  setValue('fOrderNumber', order.orderNumber || '');
-  setValue('fVendor', order.vendor || '');
-  setValue('fNotes', order.notes || '');
-
-  document.getElementById('fStatus').value = order.status || 'Ordered';
-  document.querySelectorAll('.status-pill').forEach(p => p.classList.toggle('active', p.dataset.status === order.status));
-  rebuildBrandDropdown(order.brand || '');
-  document.getElementById('fBrand').value = order.brand || '';
-
-  // Scale & variant
-  const scaleEl = document.getElementById('fScale');
-  if (scaleEl && order.scale) scaleEl.value = order.scale;
-  const varEl = document.getElementById('fVariant');
-  if (varEl && order.variant) varEl.value = order.variant;
-
-  calcPayment();
-
-  if (order.imageUrl) {
-    document.getElementById('imagePreview').innerHTML = `<img src="${escHtml(order.imageUrl)}" style="width:100%;height:100%;object-fit:cover;border-radius:8px" />`;
-  } else {
-    document.getElementById('imagePreview').innerHTML = `<i class="fa-solid fa-camera"></i><p>Click to upload photo</p><span>JPG, PNG, WEBP · max 5MB</span>`;
-  }
-
-  document.getElementById('orderModal').classList.remove('hidden');
-}
-
-function closeModal() {
-  document.getElementById('orderModal').classList.add('hidden');
-  currentEdit = null; currentImageFile = null;
-}
-
-function calcPayment() {
-  const qty  = parseFloat(document.getElementById('fQty')?.value)          || 1;
-  const buy  = parseFloat(document.getElementById('fActualPrice')?.value)   || 0;
-  const ship = parseFloat(document.getElementById('fShipping')?.value)      || 0;
-  const paid = parseFloat(document.getElementById('fPaid')?.value)          || 0;
-  const total   = (buy * qty) + ship;
-  const pending = Math.max(0, total - paid);
-  document.getElementById('fTotal').value    = total;
-  document.getElementById('fPending').value  = pending;
-  document.getElementById('fTotalDisplay').textContent   = formatINR(total);
-  document.getElementById('fPendingDisplay').textContent = formatINR(pending);
-}
-
-async function saveOrder(e) {
-  e.preventDefault();
-  const btn = document.getElementById('modalSave');
-  btn.disabled = true;
-  btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
-
-  try {
-    let imageUrl = currentEdit?.imageUrl || '';
-    if (currentImageFile) {
-      imageUrl = await uploadImageToSupabase(currentImageFile);
+  /* ── SAVE ORDER (modal) ── */
+  document.getElementById('orderForm')?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const saveBtn = document.getElementById('modalSave');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...'; }
+    const editId   = document.getElementById('editOrderId')?.value || '';
+    const price    = parseFloat(document.getElementById('fActualPrice')?.value) || 0;
+    const qty      = parseInt(document.getElementById('fQty')?.value)           || 1;
+    const ship     = parseFloat(document.getElementById('fShipping')?.value)    || 0;
+    const paid     = parseFloat(document.getElementById('fPaid')?.value)        || 0;
+    const total    = (price * qty) + ship;
+    const pending  = Math.max(0, total - paid);
+    const existing = DB.orders.find(o => o.id === editId);
+    try {
+      let imageUrl = existing?.image || '';
+      if (_currentImageFile) {
+        if (existing?.image) await deleteImageFromSupabase(existing.image);
+        imageUrl = await uploadImageToSupabase(_currentImageFile);
+      }
+      const order = {
+        product_name:   document.getElementById('fProductName')?.value.trim()  || '',
+        order_number:   document.getElementById('fOrderNumber')?.value.trim()  || '',
+        brand:          document.getElementById('fBrand')?.value.trim()        || '',
+        series:         document.getElementById('fSeries')?.value?.trim()      || '',
+        scale:          document.getElementById('fScale')?.value               || '1:64',
+        condition:      document.getElementById('fCondition')?.value           || 'Mint',
+        vendor:         document.getElementById('fVendor')?.value?.trim()      || '',
+        location:       document.getElementById('fLocation')?.value?.trim()    || '',
+        variant:        document.getElementById('fVariant')?.value             || '',
+        notes:          document.getElementById('fNotes')?.value?.trim()       || '',
+        quantity: qty, order_date: document.getElementById('fOrderDate')?.value || '',
+        eta:            document.getElementById('fEta')?.value                 || '',
+        status:         document.getElementById('fStatus')?.value              || 'Ordered',
+        preorder_price: parseFloat(document.getElementById('fPreorderPrice')?.value) || 0,
+        actual_price: price, shipping: ship, paid, pending, total, image: imageUrl,
+        updatedAt: serverTimestamp(),
+        ownerUid:  auth.currentUser?.uid   || '',
+        ownerEmail:auth.currentUser?.email || ''
+      };
+      if (editId) {
+        await updateDoc(doc(db, 'orders', editId), order);
+        try { await addActivity('info', `Updated — ${order.product_name}`); } catch(e) { console.warn(e); }
+        showToast('Order updated!', 'success');
+      } else {
+        await addDoc(collection(db, 'orders'), { ...order, createdAt: serverTimestamp() });
+        try { await addActivity('success', `Added — ${order.product_name}`); } catch(e) { console.warn(e); }
+        showToast('Order added!', 'success');
+      }
+      await fetchData(); closeModal();
+    } catch(err) {
+      console.error(err); showToast('Failed to save: ' + err.message, 'warning');
+    } finally {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save'; }
     }
+  });
 
-    const data = {
-      productName:   document.getElementById('fProductName').value.trim(),
-      brand:         document.getElementById('fBrand').value || document.getElementById('fBrandSelect').value,
-      qty:           parseInt(document.getElementById('fQty').value) || 1,
-      orderDate:     document.getElementById('fOrderDate').value,
-      eta:           document.getElementById('fEta').value,
-      status:        document.getElementById('fStatus').value || 'Ordered',
-      preorderPrice: parseFloat(document.getElementById('fPreorderPrice').value) || 0,
-      actualPrice:   parseFloat(document.getElementById('fActualPrice').value)   || 0,
-      shipping:      parseFloat(document.getElementById('fShipping').value)       || 0,
-      paid:          parseFloat(document.getElementById('fPaid').value)           || 0,
-      total:         parseFloat(document.getElementById('fTotal').value)          || 0,
-      pending:       parseFloat(document.getElementById('fPending').value)        || 0,
-      orderNumber:   document.getElementById('fOrderNumber').value.trim(),
-      scale:         document.getElementById('fScale')?.value || '1:64',
-      variant:       document.getElementById('fVariant')?.value || 'Box',
-      vendor:        document.getElementById('fVendor').value.trim(),
-      notes:         document.getElementById('fNotes').value.trim(),
-      imageUrl,
-    };
+  /* ── QUICK ACTIONS ── */
+  document.getElementById('qaExport')?.addEventListener('click', exportCSV);
+  document.getElementById('qaAnalytics')?.addEventListener('click', () => navigateTo('analytics'));
+  document.getElementById('qaDelayed')?.addEventListener('click', () => {
+    navigateTo('orders');
+    const delayed = DB.orders.filter(o => o.eta && new Date(o.eta) < new Date() && o.status !== 'Delivered');
+    delayed.length === 0
+      ? showToast('No delayed orders!', 'info')
+      : (renderTable(delayed), showToast(`${delayed.length} delayed shown`, 'warning'));
+  });
+  document.getElementById('exportCsvBtn')?.addEventListener('click', exportCSV);
 
-    if (currentEdit) {
-      await updateDoc(doc(db, 'orders', currentEdit.id), { ...data, updatedAt: serverTimestamp() });
-      showToast('Order updated!', 'success');
+  /* ── ADD ORDER PAGE FORM ── */
+  const pageForm     = document.getElementById('addOrderPageForm');
+  const pBrandSelect = document.getElementById('pBrandSelect');
+  const pNewBrandRow = document.getElementById('pNewBrandRow');
+  const pNewBrandIn  = document.getElementById('pNewBrand');
+  const pBrandHidden = document.getElementById('pBrand');
+  let _pageImageFile = null;
+
+  rebuildDropdown(pBrandSelect);
+
+  pBrandSelect?.addEventListener('change', () => {
+    if (pBrandSelect.value === '__new__') {
+      pNewBrandRow?.classList.remove('hidden'); pNewBrandIn?.focus();
+      if (pBrandHidden) pBrandHidden.value = ''; pBrandSelect.value = '';
     } else {
-      await addDoc(collection(db, 'orders'), { ...data, createdAt: serverTimestamp() });
-      showToast('Order added!', 'success');
+      pNewBrandRow?.classList.add('hidden');
+      if (pBrandHidden) pBrandHidden.value = pBrandSelect.value;
     }
-    closeModal();
-    await fetchOrders();
-  } catch (err) {
-    showToast('Save failed: ' + err.message, 'error');
-  } finally {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Order';
+  });
+
+  document.getElementById('pConfirmNewBrand')?.addEventListener('click', async () => {
+    const name = pNewBrandIn?.value.trim();
+    if (!name) { showToast('Enter a brand name', 'warning'); return; }
+    const btn = document.getElementById('pConfirmNewBrand');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>'; }
+    const added = await addCustomBrand(name);
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-check"></i> Add'; }
+    if (added) {
+      rebuildAllBrandDropdowns(name);
+      if (pBrandHidden) pBrandHidden.value = name;
+      if (pBrandSelect) pBrandSelect.value = name;
+      showToast(`Brand "${name}" saved!`, 'success');
+    } else {
+      showToast(`"${name}" already exists`, 'warning');
+      if (pBrandSelect) pBrandSelect.value = name;
+      if (pBrandHidden) pBrandHidden.value = name;
+    }
+    pNewBrandRow?.classList.add('hidden');
+    if (pNewBrandIn) pNewBrandIn.value = '';
+  });
+
+  document.getElementById('pCancelNewBrand')?.addEventListener('click', () => {
+    pNewBrandRow?.classList.add('hidden');
+    if (pNewBrandIn)  pNewBrandIn.value  = '';
+    if (pBrandSelect) pBrandSelect.value = '';
+    if (pBrandHidden) pBrandHidden.value = '';
+  });
+
+  document.querySelectorAll('#pStatusPillGroup .status-pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      document.querySelectorAll('#pStatusPillGroup .status-pill').forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      const r = pill.querySelector('input[type="radio"]');
+      if (r) { r.checked = true; const ps = document.getElementById('pStatus'); if (ps) ps.value = r.value; }
+    });
+  });
+
+  document.getElementById('pImageUploadArea')?.addEventListener('click', () => document.getElementById('pImage')?.click());
+  document.getElementById('pImage')?.addEventListener('change', e => {
+    const file = e.target.files[0]; if (!file) return;
+    if (file.size > 5 * 1024 * 1024) { showToast('Image too large (max 5MB)', 'warning'); return; }
+    _pageImageFile = file;
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const prev = document.getElementById('pImagePreview');
+      if (prev) prev.innerHTML = `<img src="${ev.target.result}" alt="preview" />`;
+    };
+    reader.readAsDataURL(file);
+  });
+
+  ['pActualPrice','pQty','pShipping','pPaid'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', calcPageTotals);
+  });
+  function calcPageTotals() {
+    const price = parseFloat(document.getElementById('pActualPrice')?.value) || 0;
+    const qty   = parseInt(document.getElementById('pQty')?.value)           || 1;
+    const ship  = parseFloat(document.getElementById('pShipping')?.value)    || 0;
+    const paid  = parseFloat(document.getElementById('pPaid')?.value)        || 0;
+    const total = (price * qty) + ship;
+    const diff  = total - paid;
+    const pend  = Math.max(0, diff);
+    const fmt   = v => `₹${v.toLocaleString('en-IN')}`;
+    const td    = document.getElementById('pTotalDisplay'); if (td) td.textContent = fmt(total);
+    const pd    = document.getElementById('pPendingDisplay');
+    if (pd) {
+      if (diff < 0) {
+        pd.textContent = `+₹${Math.abs(diff).toLocaleString('en-IN')}`;
+        pd.classList.remove('fg-calc-overdue'); pd.style.color = 'var(--green, #22c55e)';
+        pd.title = `Overpaid by ₹${Math.abs(diff).toLocaleString('en-IN')}`;
+      } else {
+        pd.textContent = fmt(pend); pd.style.color = '';
+        pd.classList.toggle('fg-calc-overdue', pend > 0); pd.title = '';
+      }
+    }
+    const ptEl = document.getElementById('pTotal');   if (ptEl) ptEl.value = total;
+    const ppEl = document.getElementById('pPending'); if (ppEl) ppEl.value = pend;
   }
-}
 
-async function deleteOrder(id) {
-  if (!confirm('Delete this order? This cannot be undone.')) return;
-  try {
-    const order = orders.find(o => o.id === id);
-    if (order?.imageUrl) await deleteImageFromSupabase(order.imageUrl);
-    await deleteDoc(doc(db, 'orders', id));
-    showToast('Order deleted', 'success');
-    await fetchOrders();
-  } catch (e) {
-    showToast('Delete failed: ' + e.message, 'error');
+  function resetPageForm() {
+    pageForm?.reset();
+    rebuildDropdown(pBrandSelect);
+    if (pBrandHidden) pBrandHidden.value = '';
+    pNewBrandRow?.classList.add('hidden');
+    document.querySelectorAll('#pStatusPillGroup .status-pill').forEach(p => p.classList.remove('active'));
+    document.querySelector('#pStatusPillGroup .status-pill')?.classList.add('active');
+    const ps = document.getElementById('pStatus'); if (ps) ps.value = 'Ordered';
+    ['pTotalDisplay','pPendingDisplay'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) { el.textContent = '₹0'; el.classList.remove('fg-calc-overdue'); el.style.color = ''; }
+    });
+    const prev = document.getElementById('pImagePreview');
+    if (prev) prev.innerHTML = '<i class="fa-solid fa-camera"></i><p>Click to upload photo</p><span>JPG, PNG, WEBP · max 5MB</span>';
+    const pi = document.getElementById('pImage'); if (pi) pi.value = '';
+    _pageImageFile = null;
   }
-}
 
-function openViewModal(id) {
-  const o = orders.find(x => x.id === id);
-  if (!o) return;
-  const today = new Date().toISOString().slice(0,10);
-  const isOverdue = o.eta && o.eta < today && o.status !== 'Delivered';
-  const statusClass = { Ordered:'status-ordered','In Transit':'status-transit',Delivered:'status-delivered',Cancelled:'status-cancelled' }[o.status]||'';
-  const paidPct = o.total > 0 ? Math.round((o.paid||0) / o.total * 100) : 0;
+  document.getElementById('addOrderPageClear')?.addEventListener('click', resetPageForm);
 
-  document.getElementById('viewModalBox').innerHTML = `
-    <div class="vm-header">
-      ${o.imageUrl ? `<img class="vm-img" src="${escHtml(o.imageUrl)}" />` : `<div class="vm-img-placeholder"><i class="fa-solid fa-car-side"></i></div>`}
-      <div class="vm-header-info">
-        <div class="vm-name">${escHtml(o.productName)}</div>
-        <div class="vm-meta">${escHtml(o.brand||'—')} · ${o.scale||'—'} · ${o.variant||'—'}</div>
-        <span class="status-badge ${statusClass}">${o.status||'—'}</span>
-        ${isOverdue ? '<span class="status-badge" style="background:rgba(239,68,68,0.15);color:#dc2626;margin-left:.5rem"><i class="fa-solid fa-triangle-exclamation"></i> Overdue</span>' : ''}
-      </div>
-      <button class="modal-close vm-close" onclick="document.getElementById('viewModal').classList.add('hidden')"><i class="fa-solid fa-xmark"></i></button>
-    </div>
-    <div class="vm-body">
-      <div class="vm-section">
-        <div class="vm-section-title"><i class="fa-solid fa-wallet"></i> Payment</div>
-        <div class="vm-row"><span>Total</span><strong>${formatINR(o.total)}</strong></div>
-        <div class="vm-row"><span>Paid</span><span style="color:#22c55e">${formatINR(o.paid)}</span></div>
-        <div class="vm-row"><span>Pending</span><span style="color:${o.pending>0?'#f97316':'#22c55e'}">${formatINR(o.pending)}</span></div>
-        <div style="margin-top:.5rem;height:6px;background:rgba(0,0,0,0.08);border-radius:3px">
-          <div style="width:${paidPct}%;height:100%;background:#22c55e;border-radius:3px;transition:width .5s"></div>
+  pageForm?.addEventListener('submit', async e => {
+    e.preventDefault();
+    const saveBtn = document.getElementById('addOrderPageSave');
+    if (saveBtn) { saveBtn.disabled = true; saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...'; }
+    const price   = parseFloat(document.getElementById('pActualPrice')?.value) || 0;
+    const qty     = parseInt(document.getElementById('pQty')?.value)           || 1;
+    const ship    = parseFloat(document.getElementById('pShipping')?.value)    || 0;
+    const paid    = parseFloat(document.getElementById('pPaid')?.value)        || 0;
+    const total   = (price * qty) + ship;
+    const pending = Math.max(0, total - paid);
+    try {
+      let imageUrl = '';
+      if (_pageImageFile) imageUrl = await uploadImageToSupabase(_pageImageFile);
+      const order = {
+        product_name:   document.getElementById('pProductName')?.value.trim() || '',
+        brand:          (document.getElementById('pBrand')?.value.trim() || document.getElementById('pBrandSelect')?.value || '').replace('__new__',''),
+        order_number:   document.getElementById('pOrderNumber')?.value.trim() || '',
+        scale:          document.getElementById('pScale')?.value              || '1:64',
+        variant:        document.getElementById('pVariant')?.value            || '',
+        notes:          document.getElementById('pNotes')?.value?.trim()      || '',
+        quantity: qty,  order_date: document.getElementById('pOrderDate')?.value || '',
+        eta:            document.getElementById('pEta')?.value                || '',
+        status:         document.getElementById('pStatus')?.value             || 'Ordered',
+        preorder_price: parseFloat(document.getElementById('pPreorderPrice')?.value) || 0,
+        actual_price: price, shipping: ship, paid, pending, total, image: imageUrl,
+        series: '', condition: 'Mint',
+        vendor:   document.getElementById('pVendor')?.value?.trim()   || '',
+        location: document.getElementById('pLocation')?.value?.trim() || '',
+        createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+        ownerUid:  auth.currentUser?.uid   || '',
+        ownerEmail:auth.currentUser?.email || ''
+      };
+      if (!order.brand) { showToast('Please select a brand', 'warning'); return; }
+      await addDoc(collection(db, 'orders'), order);
+      try { await addActivity('success', `Added — ${order.product_name}`); } catch(e) { console.warn(e); }
+      showToast('Order saved! 🎉', 'success');
+      await fetchData(); resetPageForm(); navigateTo('orders');
+    } catch(err) {
+      console.error(err); showToast('Failed to save: ' + err.message, 'warning');
+    } finally {
+      if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Order'; }
+    }
+  });
+
+  function exportCSV() {
+    if (!DB.orders.length) { showToast('No orders to export', 'warning'); return; }
+    const headers = ['ID','Product','Brand','Series','Scale','Condition','Order#','Vendor','Location','Variant','Qty','Buy Price','Market Value','Shipping','Paid','Pending','Total','Status','ETA','Order Date'];
+    const rows    = DB.orders.map(o => [o.id,o.product_name,o.brand,o.series,o.scale,o.condition,o.order_number,o.vendor,o.location,o.variant,o.quantity,o.actual_price,o.preorder_price,o.shipping,o.paid,o.pending,o.total,o.status,o.eta,o.order_date]);
+    const csv     = [headers,...rows].map(r => r.map(c => `"${c??''}"`).join(',')).join('\n');
+    const a       = Object.assign(document.createElement('a'), {
+      href: URL.createObjectURL(new Blob([csv], { type:'text/csv' })),
+      download: `pretrack_${Date.now()}.csv`
+    });
+    a.click(); showToast('CSV exported!', 'success');
+  }
+
+  /* ── CLEAR DATA ── */
+  document.getElementById('clearDataBtn')?.addEventListener('click', () => {
+    document.getElementById('clearDataModal')?.classList.remove('hidden');
+    document.getElementById('clearDataPw')?.focus();
+  });
+
+  function closeClearModal() {
+    document.getElementById('clearDataModal')?.classList.add('hidden');
+    const pw  = document.getElementById('clearDataPw');   if (pw)  pw.value = '';
+    const err = document.getElementById('clearDataPwErr');if (err) err.textContent = '';
+  }
+  document.getElementById('clearDataCancelBtn')?.addEventListener('click', closeClearModal);
+  document.getElementById('clearDataCancelBtnFooter')?.addEventListener('click', closeClearModal);
+
+  document.getElementById('clearDataConfirmBtn')?.addEventListener('click', async () => {
+    const pw    = document.getElementById('clearDataPw')?.value || '';
+    const pwErr = document.getElementById('clearDataPwErr');
+    if (!pw) { if (pwErr) pwErr.textContent = 'Enter your password'; return; }
+    const user = auth.currentUser;
+    if (!user) { if (pwErr) pwErr.textContent = 'Not logged in'; return; }
+    try {
+      // FIX: use already-imported signInWithEmailAndPassword — no dynamic import needed
+      await signInWithEmailAndPassword(auth, user.email, pw);
+      closeClearModal();
+      await Promise.all(DB.orders.map(o => o.image ? deleteImageFromSupabase(o.image) : Promise.resolve()));
+      await Promise.all(DB.orders.map(o => deleteDoc(doc(db, 'orders', o.id))));
+      await addActivity('warning', 'All orders cleared');
+      await fetchData(); showToast('All data cleared', 'info');
+    } catch(e) {
+      if (pwErr) pwErr.textContent = 'Incorrect password. Try again.';
+    }
+  });
+
+  /* ═══════════════════════════════════════
+     ORDER ACTIONS (exposed on window so
+     inline onclick="" in renderTable works)
+  ═══════════════════════════════════════ */
+  window.editOrder = function(id) {
+    const o = DB.orders.find(x => x.id === id); if (!o) return;
+    document.getElementById('modalTitle').textContent = 'Edit Model';
+    [
+      ['editOrderId','id'],['fProductName','product_name'],['fOrderNumber','order_number'],
+      ['fSeries','series'],['fScale','scale'],['fCondition','condition'],
+      ['fVendor','vendor'],['fLocation','location'],['fVariant','variant'],['fNotes','notes'],
+      ['fQty','quantity'],['fOrderDate','order_date'],['fEta','eta'],
+      ['fPreorderPrice','preorder_price'],['fActualPrice','actual_price'],['fShipping','shipping']
+    ].forEach(([fieldId, key]) => {
+      const el = document.getElementById(fieldId);
+      if (el) el.value = key === 'id' ? o.id : (o[key] ?? '');
+    });
+    const paidEl = document.getElementById('fPaid'); if (paidEl) paidEl.value = o.paid || 0;
+
+    const brand = o.brand || o.vendor || '';
+    if (brand && !getAllBrands().includes(brand)) customBrands.push(brand);
+    rebuildDropdown(document.getElementById('fBrandSelect'), brand);
+    const fBH = document.getElementById('fBrand'); if (fBH) fBH.value = brand;
+
+    const status = o.status || 'Ordered';
+    document.querySelectorAll('#orderModal .status-pill').forEach(p => {
+      p.classList.remove('active');
+      const r = p.querySelector('input[type="radio"]');
+      if (r && r.value === status) { p.classList.add('active'); r.checked = true; }
+    });
+    const fSt = document.getElementById('fStatus'); if (fSt) fSt.value = status;
+
+    _currentImageFile = null; _currentImageB64 = '';
+    const fi = document.getElementById('fImage'); if (fi) fi.value = '';
+    const ip = document.getElementById('imagePreview');
+    if (ip) ip.innerHTML = o.image
+      ? `<img src="${o.image}" alt="preview" />`
+      : '<i class="fa-solid fa-camera"></i><p>Click to upload photo</p><span>JPG, PNG, WEBP · max 5MB</span>';
+
+    const p2 = parseFloat(o.actual_price)||0, q2 = parseInt(o.quantity)||1,
+          s2 = parseFloat(o.shipping)||0,     pa2 = parseFloat(o.paid)||0;
+    const t2 = (p2*q2)+s2, d2 = t2-pa2, pe2 = Math.max(0,d2);
+    const fmt = v => `₹${v.toLocaleString('en-IN')}`;
+    const td = document.getElementById('fTotalDisplay');
+    if (td) { td.textContent = fmt(t2); td.title = `(₹${p2.toLocaleString('en-IN')} × ${q2}) + ₹${s2.toLocaleString('en-IN')} shipping`; }
+    const pd = document.getElementById('fPendingDisplay');
+    if (pd) {
+      if (d2 < 0) {
+        pd.textContent = `+₹${Math.abs(d2).toLocaleString('en-IN')}`;
+        pd.classList.remove('fg-calc-overdue'); pd.style.color = 'var(--green, #22c55e)';
+        pd.title = `Overpaid by ₹${Math.abs(d2).toLocaleString('en-IN')}`;
+      } else {
+        pd.textContent = fmt(pe2); pd.style.color = '';
+        pd.classList.toggle('fg-calc-overdue', pe2 > 0); pd.title = '';
+      }
+    }
+    const ftEl = document.getElementById('fTotal');   if (ftEl) ftEl.value = t2;
+    const fpEl = document.getElementById('fPending'); if (fpEl) fpEl.value = pe2;
+    openModal();
+  };
+
+  window.deleteOrder = async function(id) {
+    if (!confirm('Delete this order?')) return;
+    try {
+      const o = DB.orders.find(x => x.id === id);
+      if (o?.image) await deleteImageFromSupabase(o.image);
+      await deleteDoc(doc(db, 'orders', id));
+      await addActivity('warning', `Deleted — ${o?.product_name || id}`);
+      showToast('Order deleted', 'success'); await fetchData();
+    } catch(e) { showToast('Failed to delete: ' + e.message, 'warning'); }
+  };
+
+  window.duplicateOrder = async function(id) {
+    const o = DB.orders.find(x => x.id === id); if (!o) return;
+    try {
+      const { id: _id, createdAt, updatedAt, ...copy } = o;
+      await addDoc(collection(db, 'orders'), {
+        ...copy, product_name: copy.product_name + ' (Copy)',
+        createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+      });
+      await addActivity('info', `Duplicated — ${o.product_name}`);
+      showToast('Order duplicated!', 'success'); await fetchData();
+    } catch(e) { showToast('Failed to duplicate', 'warning'); }
+  };
+
+  window.viewOrder = function(id) {
+  const o = DB.orders.find(x => x.id === id); if (!o) return;
+  const modal = document.getElementById('viewModal');
+  const box   = document.getElementById('viewModalBox');
+  if (!modal || !box) return;
+
+  const sc    = (o.status||'').toLowerCase().replace(/\s+/g,'-');
+  const fmt   = v => `₹${Number(v||0).toLocaleString('en-IN')}`;
+  const paid  = o.paid||0, total = o.total||0, pending = o.pending||0;
+  const pct   = total > 0 ? Math.min(100, Math.round((paid/total)*100)) : 100;
+  const barClr = pending > 0 ? 'linear-gradient(90deg,#f97316,#fbbf24)' : '#22c55e';
+
+  // ETA banner
+  let etaBanner = `<div class="vm-eta-banner vm-eta-none"><i class="fa-solid fa-calendar fa-lg"></i><div><div style="font-weight:600">No ETA set</div></div></div>`;
+  if (o.eta) {
+    const today = new Date(); today.setHours(0,0,0,0);
+    const eta   = new Date(o.eta);
+    const diff  = Math.ceil((eta - today) / (1000*60*60*24));
+    if (o.status === 'Delivered') {
+      etaBanner = `<div class="vm-eta-banner vm-eta-done"><i class="fa-solid fa-box-open fa-lg"></i><div><div style="font-weight:700">Delivered</div><div style="font-size:.73rem;opacity:.8">ETA was ${formatDate(o.eta)}</div></div></div>`;
+    } else if (diff < 0) {
+      etaBanner = `<div class="vm-eta-banner vm-eta-overdue"><i class="fa-solid fa-triangle-exclamation fa-lg"></i><div><div class="vm-eta-days">${Math.abs(diff)}d overdue</div><div style="font-size:.73rem;opacity:.8">Was due ${formatDate(o.eta)}</div></div></div>`;
+    } else if (diff === 0) {
+      etaBanner = `<div class="vm-eta-banner vm-eta-soon"><i class="fa-solid fa-bell fa-lg"></i><div><div style="font-weight:700">Due today!</div><div style="font-size:.73rem;opacity:.8">ETA: ${formatDate(o.eta)}</div></div></div>`;
+    } else if (diff <= 7) {
+      etaBanner = `<div class="vm-eta-banner vm-eta-soon"><i class="fa-solid fa-truck-moving fa-lg"></i><div><div class="vm-eta-days">${diff}d</div><div style="font-size:.73rem;opacity:.8">left · ETA ${formatDate(o.eta)}</div></div></div>`;
+    } else {
+      etaBanner = `<div class="vm-eta-banner vm-eta-ok"><i class="fa-solid fa-calendar-days fa-lg"></i><div><div class="vm-eta-days">${diff}d</div><div style="font-size:.73rem;opacity:.8">to go · ETA ${formatDate(o.eta)}</div></div></div>`;
+    }
+  }
+
+  // Details rows — only show non-empty values
+  const details = [
+    { icon:'fa-building',        label:'Brand',     val: o.brand||o.vendor },
+    { icon:'fa-ruler',           label:'Scale',     val: o.scale },
+    { icon:'fa-cube',            label:'Variant',   val: o.variant },
+    { icon:'fa-star-half-stroke',label:'Condition', val: o.condition },
+    { icon:'fa-store',           label:'Seller',    val: o.vendor },
+    { icon:'fa-barcode',         label:'Order #',   val: o.order_number },
+    { icon:'fa-calendar-plus',   label:'Ordered',   val: o.order_date ? formatDate(o.order_date) : '' },
+    { icon:'fa-boxes-stacked',   label:'Quantity',  val: o.quantity||1 },
+    { icon:'fa-map-pin',         label:'Location',  val: o.location },
+    { icon:'fa-layer-group',     label:'Series',    val: o.series },
+  ].filter(d => d.val && d.val !== '' && d.val !== '—');
+
+  // Hero background
+  const heroStyle = o.image
+    ? ''
+    : 'background:linear-gradient(135deg,#1a1035,#2d2270 55%,#1d3a5f);';
+
+  box.innerHTML = `
+    <div class="vm-hero" style="${heroStyle}">
+      ${o.image ? `<div class="vm-blur-bg" style="background-image:url('${o.image}')"></div><img class="vm-hero-img" src="${o.image}" alt="${escHtml(o.product_name)}" />` : `<div class="vm-no-img-icon"><i class="fa-solid fa-car-side"></i></div>`}
+      <div class="vm-hero-overlay">
+        <button class="vm-close-btn" id="vmClose"><i class="fa-solid fa-xmark"></i></button>
+        <div style="display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.3rem">
+          <span class="badge badge-${sc}">${escHtml(o.status||'Ordered')}</span>
+          ${o.variant  ? `<span style="background:rgba(255,255,255,.18);color:#fff;padding:2px 9px;border-radius:20px;font-size:.65rem;font-weight:700">${escHtml(o.variant)}</span>` : ''}
+          ${o.scale    ? `<span style="background:rgba(255,255,255,.18);color:#fff;padding:2px 9px;border-radius:20px;font-size:.65rem;font-weight:700">${escHtml(o.scale)}</span>` : ''}
+          ${o.quantity > 1 ? `<span style="background:rgba(124,92,252,.7);color:#fff;padding:2px 9px;border-radius:20px;font-size:.65rem;font-weight:700">×${o.quantity}</span>` : ''}
         </div>
-        <div style="font-size:.68rem;color:var(--text-muted);margin-top:.25rem">${paidPct}% paid</div>
+        <div class="vm-hero-name">${escHtml(o.product_name||'—')}</div>
+        <div class="vm-hero-brand"><i class="fa-solid fa-building"></i> ${escHtml(o.brand||o.vendor||'—')}</div>
       </div>
-      <div class="vm-section">
-        <div class="vm-section-title"><i class="fa-solid fa-calendar"></i> Timeline</div>
-        <div class="vm-row"><span>Order Date</span><span>${formatDate(o.orderDate)}</span></div>
-        <div class="vm-row"><span>ETA</span><span ${isOverdue?'style="color:#ef4444"':''}>${formatDate(o.eta)}</span></div>
-        <div class="vm-row"><span>Qty</span><span>${o.qty||1}</span></div>
+    </div>
+
+    <div class="vm-body">
+      ${etaBanner}
+
+      <div>
+        <div class="vm-section-title"><i class="fa-solid fa-wallet"></i> Payment</div>
+        <div class="vm-pay-row">
+          <div class="vm-pay-card">
+            <div class="vm-pay-label">Total</div>
+            <div class="vm-pay-val" style="color:#1e1b4b">${fmt(total)}</div>
+          </div>
+          <div class="vm-pay-card" style="border-color:#bbf7d0">
+            <div class="vm-pay-label" style="color:#16a34a">Paid</div>
+            <div class="vm-pay-val" style="color:#16a34a">${fmt(paid)}</div>
+          </div>
+          <div class="vm-pay-card" style="border-color:${pending>0?'#fed7aa':'#bbf7d0'}">
+            <div class="vm-pay-label" style="color:${pending>0?'#c2410c':'#16a34a'}">${pending>0?'Due':'Cleared'}</div>
+            <div class="vm-pay-val" style="color:${pending>0?'#c2410c':'#16a34a'}">${fmt(pending)}</div>
+          </div>
+        </div>
+        <div class="vm-progress-wrap">
+          <div style="display:flex;justify-content:space-between;font-size:.68rem;color:#64748b;font-weight:600">
+            <span>Payment progress</span><span style="color:${pct>=100?'#16a34a':'#7c5cfc'};font-weight:800">${pct}% paid</span>
+          </div>
+          <div class="vm-progress-track">
+            <div class="vm-progress-fill" style="width:${pct}%;background:${barClr}"></div>
+          </div>
+          <div style="font-size:.66rem;color:#94a3b8;margin-top:.2rem">
+            ${fmt(o.actual_price||0)} × ${o.quantity||1}${o.shipping>0?` + ${fmt(o.shipping)} shipping`:''}
+          </div>
+        </div>
       </div>
-      ${o.vendor ? `<div class="vm-section"><div class="vm-section-title"><i class="fa-solid fa-store"></i> Seller</div><div class="vm-row"><span>Seller</span><span>${escHtml(o.vendor)}</span></div></div>` : ''}
-      ${o.notes  ? `<div class="vm-section"><div class="vm-section-title"><i class="fa-solid fa-note-sticky"></i> Notes</div><p style="font-size:.82rem;color:var(--text-secondary)">${escHtml(o.notes)}</p></div>` : ''}
-      <div style="display:flex;gap:.6rem;margin-top:1rem">
-        <button class="btn btn-primary" style="flex:1" onclick="document.getElementById('viewModal').classList.add('hidden');openEditModal('${o.id}')"><i class="fa-solid fa-pen"></i> Edit</button>
-        <button class="btn btn-danger" onclick="deleteOrder('${o.id}');document.getElementById('viewModal').classList.add('hidden')"><i class="fa-solid fa-trash"></i></button>
+
+      ${details.length ? `
+      <div>
+        <div class="vm-section-title"><i class="fa-solid fa-circle-info"></i> Details</div>
+        <div class="vm-details-grid">
+          ${details.map(d => `
+            <div class="vm-detail-item">
+              <div class="vm-detail-label"><i class="fa-solid ${d.icon}"></i> ${d.label}</div>
+              <div class="vm-detail-val">${escHtml(String(d.val))}</div>
+            </div>`).join('')}
+        </div>
+      </div>` : ''}
+
+      ${o.notes ? `
+      <div>
+        <div class="vm-section-title"><i class="fa-solid fa-note-sticky"></i> Notes</div>
+        <div class="vm-notes">${escHtml(o.notes)}</div>
+      </div>` : ''}
+
+      <div class="vm-actions">
+        <button class="btn btn-ghost" style="border:1.5px solid #ede9fe;color:#5b21b6;background:#fff" onclick="document.getElementById('viewModal').classList.add('hidden');document.body.style.overflow='';editOrder('${o.id}')">
+          <i class="fa-solid fa-pen"></i> Edit
+        </button>
+        <button class="btn btn-danger" style="background:linear-gradient(135deg,#dc2626,#be123c);border:none" onclick="document.getElementById('viewModal').classList.add('hidden');document.body.style.overflow='';deleteOrder('${o.id}')">
+          <i class="fa-solid fa-trash"></i> Delete
+        </button>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('vmClose')?.addEventListener('click', () => {
+    modal.classList.add('hidden'); document.body.style.overflow = '';
+  });
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+};
+
+} // ← end initDashboard()
+
+/* ══════════════════════════════════════════════════════════════════
+   EDIT USER MODAL
+   Injected into DOM on first use — no HTML changes required.
+   Features: edit name, role, status + send password reset email.
+══════════════════════════════════════════════════════════════════ */
+function ensureEditUserModal() {
+  if (document.getElementById('editUserModal')) return;
+  const modal = document.createElement('div');
+  modal.id        = 'editUserModal';
+  modal.className = 'modal-overlay hidden';
+  modal.innerHTML = `
+    <div class="modal-box glass" style="max-width:480px;width:100%">
+      <div class="modal-header">
+        <h2 style="display:flex;align-items:center;gap:.5rem">
+          <i class="fa-solid fa-user-pen"></i> Edit User
+        </h2>
+        <button class="modal-close-btn" id="euClose"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div style="padding:1.5rem;display:flex;flex-direction:column;gap:1.1rem">
+        <input type="hidden" id="euId" />
+
+        <div class="form-group">
+          <label class="form-label">Display Name</label>
+          <input type="text" id="euName" class="form-control" placeholder="Full name" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">
+            Email
+            <span style="color:var(--text-muted);font-size:.75rem;font-weight:400">(read-only)</span>
+          </label>
+          <input type="email" id="euEmail" class="form-control"
+                 disabled style="opacity:.55;cursor:not-allowed" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Role</label>
+          <select id="euRole" class="form-control">
+            <option value="viewer">User — view only</option>
+            <option value="editor">Editor — add &amp; edit</option>
+            <option value="admin">Admin — full access</option>
+            <option value="super_admin">Super Admin</option>
+          </select>
+          <p id="euRoleDesc" style="font-size:.75rem;color:var(--text-muted);margin-top:.35rem"></p>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Account Status</label>
+          <select id="euStatus" class="form-control">
+            <option value="active">Active</option>
+            <option value="disabled">Disabled</option>
+          </select>
+        </div>
+
+        <div style="border-top:1px solid var(--border,rgba(255,255,255,.1));padding-top:1.1rem">
+          <label class="form-label" style="margin-bottom:.6rem;display:flex;align-items:center;gap:.4rem">
+            <i class="fa-solid fa-key" style="color:var(--primary)"></i> Password Reset
+          </label>
+          <button id="euResetBtn" class="btn btn-ghost" style="width:100%;justify-content:center">
+            <i class="fa-solid fa-envelope"></i>&nbsp; Send Password Reset Email
+          </button>
+          <p style="font-size:.73rem;color:var(--text-muted);margin-top:.4rem;text-align:center">
+            A secure reset link will be emailed to the user. You cannot set passwords directly from the client.
+          </p>
+        </div>
+
+        <div id="euFeedback" style="font-size:.82rem;min-height:1.2rem;text-align:center"></div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:.75rem;justify-content:flex-end;
+                                        padding:.9rem 1.5rem;
+                                        border-top:1px solid var(--border,rgba(255,255,255,.1))">
+        <button class="btn btn-ghost" id="euCancel">Cancel</button>
+        <button class="btn btn-primary" id="euSave">
+          <i class="fa-solid fa-floppy-disk"></i> Save Changes
+        </button>
       </div>
     </div>`;
-  document.getElementById('viewModal').classList.remove('hidden');
-  // expose openEditModal globally for the inline onclick
-  window.openEditModal = openEditModal;
-  window.deleteOrder   = deleteOrder;
+  document.body.appendChild(modal);
+
+  /* role description helper */
+  const roleDescs = {
+    viewer:      '👁 Can only view orders — no add/edit',
+    editor:      '✏️ Can add and edit orders',
+    admin:       '⚙️ Full access, cannot manage users',
+    super_admin: '👑 Full access including user management'
+  };
+  document.getElementById('euRole').addEventListener('change', e => {
+    document.getElementById('euRoleDesc').textContent = roleDescs[e.target.value] || '';
+  });
+
+  function setFeedback(msg, isError = false) {
+    const el = document.getElementById('euFeedback');
+    if (!el) return;
+    el.textContent  = msg;
+    el.style.color  = isError ? 'var(--red,#ef4444)' : 'var(--green,#22c55e)';
+  }
+
+  function closeEditModal() {
+    modal.classList.add('hidden');
+    document.body.style.overflow = '';
+    setFeedback('');
+  }
+
+  document.getElementById('euClose').addEventListener('click',  closeEditModal);
+  document.getElementById('euCancel').addEventListener('click', closeEditModal);
+  modal.addEventListener('click', e => { if (e.target === modal) closeEditModal(); });
+
+  /* Send password reset email */
+  document.getElementById('euResetBtn').addEventListener('click', async () => {
+    const email = document.getElementById('euEmail').value;
+    if (!email) return;
+    const btn = document.getElementById('euResetBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Sending…';
+    setFeedback('');
+    try {
+      await sendPasswordResetEmail(auth, email);
+      setFeedback(`✓ Reset email sent to ${email}`);
+      showToast('Password reset email sent!', 'success');
+    } catch(e) {
+      setFeedback('Could not send reset email: ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-envelope"></i>&nbsp; Send Password Reset Email';
+    }
+  });
+
+  /* Save name / role / status */
+  document.getElementById('euSave').addEventListener('click', async () => {
+    const docId  = document.getElementById('euId').value;
+    const name   = document.getElementById('euName').value.trim();
+    const role   = document.getElementById('euRole').value;
+    const status = document.getElementById('euStatus').value;
+    const btn    = document.getElementById('euSave');
+    if (!docId) return;
+    setFeedback('');
+    btn.disabled = true;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving…';
+    try {
+      await updateDoc(doc(db, 'users', docId), { name, role, status, updatedAt: serverTimestamp() });
+      /* optimistic local update so re-render is instant */
+      const lu = DB.users.find(u => u.id === docId);
+      if (lu) { lu.name = name; lu.role = role; lu.status = status; }
+      showToast('User updated!', 'success');
+      closeEditModal();
+      await fetchData();
+    } catch(e) {
+      setFeedback('Failed to save: ' + e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fa-solid fa-floppy-disk"></i> Save Changes';
+    }
+  });
 }
 
-function highlightOrder(id) {
-  const card = document.querySelector(`.col-card[data-id="${id}"]`);
-  if (card) { card.scrollIntoView({ behavior: 'smooth', block: 'center' }); card.style.boxShadow = '0 0 0 3px var(--primary)'; setTimeout(() => card.style.boxShadow = '', 2000); }
+window.editUser = function(docId) {
+  ensureEditUserModal();
+  const user = DB.users.find(u => u.id === docId);
+  if (!user) { showToast('User not found', 'warning'); return; }
+  document.getElementById('euId').value     = user.id;
+  document.getElementById('euName').value   = user.name   || '';
+  document.getElementById('euEmail').value  = user.email  || '';
+  document.getElementById('euRole').value   = user.role   || 'viewer';
+  document.getElementById('euStatus').value = user.status || 'active';
+  document.getElementById('euFeedback').textContent = '';
+  const roleDescs = {
+    viewer:'👁 Can only view orders — no add/edit', editor:'✏️ Can add and edit orders',
+    admin:'⚙️ Full access, cannot manage users',   super_admin:'👑 Full access including user management'
+  };
+  const rd = document.getElementById('euRoleDesc');
+  if (rd) rd.textContent = roleDescs[user.role || 'viewer'] || '';
+  document.getElementById('editUserModal').classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+};
+
+/* ═══════════════════════════════════════════
+   USER STATUS / DELETE — window-exposed
+   FIX: currentStatus now properly received;
+        local DB.users updated immediately;
+        deleteUser alias added
+═══════════════════════════════════════════ */
+window.toggleUserStatus = async function(docId, currentStatus) {
+  const newStatus = currentStatus === 'active' ? 'disabled' : 'active';
+  try {
+    await updateDoc(doc(db, 'users', docId), { status: newStatus, updatedAt: serverTimestamp() });
+    const u = DB.users.find(x => x.id === docId);
+    if (u) u.status = newStatus; // optimistic local update
+    showToast(`User ${newStatus === 'active' ? 'enabled' : 'disabled'}`, 'success');
+    renderUsers();
+  } catch(e) { showToast('Failed to update status: ' + e.message, 'warning'); }
+};
+
+window.removeUser = async function(docId, email) {
+  if (!confirm(`Remove ${email} from PreTrack?\n\nThis removes their profile. Their Firebase Auth account stays.`)) return;
+  try {
+    await deleteDoc(doc(db, 'users', docId));
+    DB.users = DB.users.filter(u => u.id !== docId); // optimistic local update
+    showToast('User removed', 'success');
+    renderUsers();
+  } catch(e) { showToast('Failed to remove user: ' + e.message, 'warning'); }
+};
+
+window.deleteUser = window.removeUser; // ← alias: HTML that calls deleteUser() still works
+
+/* ══════════════════════════════════════ FIRESTORE ══════════════════════════════════════ */
+/* ══════════════════════════════════════ THIS WEEK'S ARRIVALS ══════════════════════════════════════ */
+function renderWeekArrivals() {
+  const scrollEl = document.getElementById('insightScroll');
+  const subEl    = document.getElementById('insightSub');
+  if (!scrollEl) return;
+  const fmt  = v => '\u20b9' + Number(v||0).toLocaleString('en-IN');
+  const allO = DB.orders;
+  if (!allO.length) {
+    scrollEl.innerHTML = '<div style="color:var(--text-muted);font-size:.8rem;padding:.5rem 0">Add orders to see insights</div>';
+    if (subEl) subEl.textContent = 'No data yet';
+    return;
+  }
+  const today = new Date(); today.setHours(0,0,0,0);
+  const in7   = new Date(today); in7.setDate(today.getDate()+7);
+
+  const sellerMap = {};
+  allO.forEach(o=>{ const s=o.vendor||'Unknown'; sellerMap[s]=(sellerMap[s]||0)+(o.total||0); });
+  const topSeller = Object.entries(sellerMap).sort((a,b)=>b[1]-a[1])[0];
+
+  const delivered = allO.filter(o=>o.status==='Delivered'&&o.order_date&&o.eta);
+  const avgDays   = delivered.length ? Math.round(delivered.reduce((s,o)=>{
+    const d1=new Date(o.order_date),d2=new Date(o.eta);
+    return s+Math.max(0,Math.ceil((d2-d1)/(1000*60*60*24)));
+  },0)/delivered.length) : null;
+
+  const brandAvg={},brandCnt={};
+  allO.forEach(o=>{const b=o.brand||'Unknown';const u=(o.actual_price>0?o.actual_price:o.preorder_price)||0;if(!u)return;brandAvg[b]=(brandAvg[b]||0)+u;brandCnt[b]=(brandCnt[b]||0)+1;});
+  const bestValBrand = Object.entries(brandAvg).filter(([b])=>brandCnt[b]>=2).map(([b,t])=>([b,Math.round(t/brandCnt[b])])).sort((a,b)=>a[1]-b[1])[0];
+
+  const biggest      = allO.reduce((mx,o)=>(o.total||0)>(mx.total||0)?o:mx,allO[0]);
+  const totalInvested= allO.reduce((s,o)=>s+(o.total||0),0);
+  const totalPaid    = allO.reduce((s,o)=>s+(o.paid||0),0);
+  const payHealth    = totalInvested>0?Math.round((totalPaid/totalInvested)*100):0;
+
+  const carWords={};
+  allO.forEach(o=>{const name=(o.product_name||'').toUpperCase();['PORSCHE','BMW','NISSAN','FERRARI','LAMBORGHINI','MCLAREN','TOYOTA','MAZDA','HONDA','FORD','AUDI','SUPRA','RX7','GTR','GT3'].forEach(w=>{if(name.includes(w))carWords[w]=(carWords[w]||0)+1;});});
+  const topCar = Object.entries(carWords).sort((a,b)=>b[1]-a[1])[0];
+
+  const overdueOrders = allO.filter(o=>{if(!o.eta||o.status==='Delivered'||o.status==='Cancelled')return false;const d=new Date(o.eta);d.setHours(0,0,0,0);return d<today;}).sort((a,b)=>new Date(a.eta)-new Date(b.eta));
+
+  const scaleMap={};
+  allO.forEach(o=>{const s=o.scale||'1:64';scaleMap[s]=(scaleMap[s]||0)+1;});
+  const topScale = Object.entries(scaleMap).sort((a,b)=>b[1]-a[1])[0];
+
+  const arrivals = allO.filter(o=>{if(!o.eta||o.status==='Delivered'||o.status==='Cancelled')return false;const d=new Date(o.eta);d.setHours(0,0,0,0);return d>=today&&d<=in7;}).sort((a,b)=>new Date(a.eta)-new Date(b.eta));
+
+  const cards=[];
+  if(topSeller){const pct=Math.min(100,Math.round((topSeller[1]/totalInvested)*100));cards.push({color:'#7c5cfc',icon:'fa-store',label:'Top Seller',val:topSeller[0],sub:fmt(topSeller[1])+' spent \xb7 '+pct+'% of total',bar:pct,barColor:'#7c5cfc'});}
+  if(avgDays!==null){const r=avgDays<=14?'Fast \ud83d\udfe2':avgDays<=30?'Avg \ud83d\udfe1':'Slow \ud83d\udd34';cards.push({color:'#0284c7',icon:'fa-clock',label:'Avg Delivery',val:avgDays+'d',sub:'From '+delivered.length+' orders \xb7 '+r,bar:Math.min(100,Math.round((avgDays/60)*100)),barColor:'#0284c7'});}
+  if(bestValBrand)cards.push({color:'#16a34a',icon:'fa-tag',label:'Best Value',val:bestValBrand[0],sub:'Avg '+fmt(bestValBrand[1])+' per model',bar:null});
+  cards.push({color:payHealth>=80?'#16a34a':payHealth>=50?'#f97316':'#ef4444',icon:'fa-heart-pulse',label:'Pay Health',val:payHealth+'%',sub:fmt(totalPaid)+' paid of '+fmt(totalInvested),bar:payHealth,barColor:payHealth>=80?'#16a34a':payHealth>=50?'#f97316':'#ef4444'});
+  if(biggest)cards.push({color:'#ec4899',icon:'fa-trophy',label:'Biggest Order',val:fmt(biggest.total||0),sub:(biggest.product_name||'').substring(0,26)+((biggest.product_name||'').length>26?'\u2026':''),bar:null});
+  if(topCar)cards.push({color:'#f97316',icon:'fa-car-side',label:'Fav Car',val:topCar[0],sub:topCar[1]+' models',bar:null});
+  if(topScale){const p=Math.min(100,Math.round((topScale[1]/allO.length)*100));cards.push({color:'#6d28d9',icon:'fa-ruler',label:'Fav Scale',val:topScale[0],sub:topScale[1]+' models \xb7 '+p+'%',bar:p,barColor:'#6d28d9'});}
+  if(overdueOrders.length){const days=Math.abs(Math.ceil((new Date(overdueOrders[0].eta)-today)/(1000*60*60*24)));cards.push({color:'#ef4444',icon:'fa-triangle-exclamation',label:'Overdue',val:overdueOrders.length+' late',sub:'Oldest: '+days+'d \xb7 '+(overdueOrders[0].vendor||'').substring(0,16),bar:null});}
+  if(arrivals.length){cards.push({color:'#7c5cfc',icon:'fa-truck-fast',label:'This Week',val:arrivals.length+' arriving',sub:arrivals.slice(0,2).map(o=>(o.product_name||'').substring(0,18)).join(', '),bar:null});}
+
+  scrollEl.innerHTML = cards.map(card=>
+    '<div class="insight-card" style="border-top-color:'+card.color+'">'
+      +'<div style="display:flex;align-items:center;gap:.5rem">'
+        +'<div class="insight-card-icon" style="background:'+card.color+'22;color:'+card.color+'"><i class="fa-solid '+card.icon+'"></i></div>'
+        +'<span class="insight-card-label">'+card.label+'</span>'
+      +'</div>'
+      +'<div class="insight-card-val'+(String(card.val).length>9?' sm':'')+'">'+card.val+'</div>'
+      +'<div class="insight-card-sub">'+card.sub+'</div>'
+      +(card.bar!=null?'<div class="insight-card-bar-wrap"><div class="insight-card-bar" style="width:'+card.bar+'%;background:'+card.barColor+'"></div></div>':'')
+    +'</div>'
+  ).join('');
+  if(subEl) subEl.textContent = cards.length+' insights from '+allO.length+' models';
 }
 
-function setValue(id, val) {
-  const el = document.getElementById(id);
-  if (el) el.value = val;
+function renderRecentOrders() {
+  const c = document.getElementById('recentOrdersList'); if (!c) return;
+  const items = DB.orders.slice(0,10);
+  if (!items.length) { c.innerHTML=`<div class="empty-state">No orders yet</div>`; return; }
+  c.innerHTML = items.map(o => `
+    <div class="recent-order-item">
+      <div class="roi-thumb">${o.image?`<img src="${o.image}" alt="${escHtml(o.product_name)}" />`:`<i class="fa-solid fa-cube"></i>`}</div>
+      <div class="roi-info">
+        <div class="roi-name">${escHtml(o.product_name)}</div>
+        <div class="roi-meta">${escHtml(o.brand||o.vendor||'—')} • ${escHtml(o.scale||'1:64')}</div>
+      </div>
+      <div class="roi-status"><span class="badge badge-${(o.status||'').toLowerCase().replace(/\s+/g,'-')}">${escHtml(o.status||'Ordered')}</span></div>
+    </div>`).join('');
 }
+
+function renderEtaWidget() {
+  const c = document.getElementById('etaList'); if (!c) return;
+  const upcoming = DB.orders.filter(o=>o.eta&&o.status!=='Delivered'&&o.status!=='Owned').sort((a,b)=>new Date(a.eta)-new Date(b.eta)).slice(0,6);
+  if (!upcoming.length) { c.innerHTML=`<div class="empty-state">No upcoming deliveries</div>`; return; }
+  const today = new Date();
+  c.innerHTML = upcoming.map(o => {
+    const d  = Math.ceil((new Date(o.eta)-today)/(1000*60*60*24));
+    let dc = 'eta-chip-ok', dl = `${d}d`;
+    if (d < 0) { dc='eta-chip-overdue'; dl=`${Math.abs(d)}d overdue`; } else if (d <= 7) dc='eta-chip-soon';
+    return `<div class="delivery-item">
+      <div class="delivery-icon"><i class="fa-solid fa-truck"></i></div>
+      <div class="delivery-info">
+        <div class="delivery-name">${escHtml(o.product_name)}</div>
+        <div class="delivery-meta">${escHtml(o.brand||o.vendor||'—')} • ETA ${escHtml(o.eta)}</div>
+        <div class="delivery-chips">
+          <span class="delivery-chip eta-chip ${dc}"><i class="fa-solid fa-calendar-days"></i> ${dl}</span>
+          <span class="delivery-chip vendor-chip"><i class="fa-solid fa-store"></i> ${escHtml(o.brand||o.vendor||'—')}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderActivityFeed() {
+  const c = document.getElementById('activityList'); if (!c) return;
+  const items = DB.activity.slice(0,12);
+  if (!items.length) { c.innerHTML=`<div class="empty-state">No recent activity</div>`; return; }
+  c.innerHTML = items.map(a => `
+    <div class="activity-item">
+      <span class="activity-dot ${escHtml(a.type||'info')}"></span>
+      <span>${escHtml(a.msg||'')}</span>
+      <span class="activity-time">${escHtml(a.time||'')}</span>
+    </div>`).join('');
+}
+
+function renderBrandLeaderboard() {
+  const c = document.getElementById('leaderboardList'); if (!c) return;
+  if (!DB.orders.length) { c.innerHTML=`<div class="empty-state">No data yet</div>`; return; }
+  const bm = {};
+  DB.orders.forEach(o => { const k=(o.brand||o.vendor||'Unknown').trim(); bm[k]=(bm[k]||0)+(o.quantity||1); });
+  const sorted = Object.entries(bm).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const ri = i => i===0?`<div class="lb-rank-icon gold"><i class="fa-solid fa-crown"></i></div>`
+                : i===1?`<div class="lb-rank-icon silver"><i class="fa-solid fa-medal"></i></div>`
+                : i===2?`<div class="lb-rank-icon bronze"><i class="fa-solid fa-award"></i></div>`
+                :        `<div class="lb-rank-icon"><i class="fa-solid fa-hashtag"></i></div>`;
+  c.innerHTML = sorted.map(([brand,qty],i) => `
+    <div class="lb-item">${ri(i)}
+      <div class="lb-info"><div class="lb-name">#${i+1} ${escHtml(brand)}</div><div class="lb-sub">${qty} unit${qty!==1?'s':''} tracked</div></div>
+      <span class="lb-count">${qty}</span>
+    </div>`).join('');
+}
+
+function renderAlerts() {
+  const c = document.getElementById('alertsPanel'); if (!c) return;
+  const alerts  = [];
+  const delayed = DB.orders.filter(o=>o.eta&&new Date(o.eta)<new Date()&&o.status!=='Delivered'&&o.status!=='Owned');
+  const unpaid  = DB.orders.filter(o=>(o.pending||0)>0);
+  if (delayed.length) alerts.push({ type:'warning', msg:`${delayed.length} delayed order(s)` });
+  if (unpaid.length)  alerts.push({ type:'danger',  msg:`${unpaid.length} order(s) with pending payment` });
+  if (!alerts.length) alerts.push({ type:'info',    msg:'All systems normal' });
+  c.innerHTML = alerts.map(a => `<div class="alert-item ${a.type}"><i class="fa-solid fa-circle-info"></i><span>${escHtml(a.msg)}</span></div>`).join('');
+}
+
+function renderPayments() {
+
+bootPage(async(user,isSA)=>{
+  await fetchData();
+  initDashboard();
+});

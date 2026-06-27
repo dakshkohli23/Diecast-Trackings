@@ -4,22 +4,17 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>PreTrack — Analytics</title>
-  <link rel="stylesheet" href="../../assets/css/style.css" />
   <link rel="manifest" href="../../pwa/manifest.json" />
   <meta name="theme-color" content="#7c5cfc" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-  <meta name="apple-mobile-web-app-title" content="PreTrack" />
-  
-  
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@400;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" />
+  <link rel="stylesheet" href="../../assets/css/style.css" />
 </head>
-<body class="dashboard-body" data-page="analytics">
+<body class="dashboard-body">
 
-  <!-- ═══════════════ SIDEBAR ═══════════════ -->
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
       <div class="brand-icon"><i class="fa-solid fa-car-side"></i></div>
@@ -30,22 +25,22 @@
     </div>
     <nav class="sidebar-nav">
       <div class="nav-group-label">MAIN</div>
-      <a href="index.html" class="nav-item" data-page="dashboard" data-tooltip="Dashboard"><i class="fa-solid fa-gauge-high"></i><span>Dashboard</span></a>
-      <a href="collection.html" class="nav-item" data-page="collection" data-tooltip="Collection"><i class="fa-solid fa-car-side"></i><span>Collection</span></a>
-      <a href="catalog.html" class="nav-item" data-page="catalog" data-tooltip="Catalog"><i class="fa-solid fa-shop"></i><span>Catalog</span></a>
-      <a href="brands.html" class="nav-item" data-page="brands" data-tooltip="Brands"><i class="fa-solid fa-building"></i><span>Brands</span></a>
-      <a href="sellers.html" class="nav-item" data-page="sellers" data-tooltip="Sellers"><i class="fa-solid fa-store"></i><span>Sellers</span></a>
-      <a href="add-order.html" class="nav-item" data-page="add-order" data-tooltip="Add Order"><i class="fa-solid fa-circle-plus"></i><span>Add Order</span></a>
-      <a href="calendar.html" class="nav-item" data-page="calendar" data-tooltip="ETA Calendar"><i class="fa-solid fa-calendar-days"></i><span>Calendar</span></a>
-      <a href="upcoming.html" class="nav-item" data-page="upcoming" data-tooltip="Upcoming Deliveries"><i class="fa-solid fa-truck-fast"></i><span>Upcoming</span><span class="nav-badge" id="upcomingBadge" style="display:none"></span></a>
+      <a href="index.html" class="nav-item" data-section="dashboard" data-tooltip="Dashboard"><i class="fa-solid fa-gauge-high"></i><span>Dashboard</span></a>
+      <a href="collection.html" class="nav-item" data-section="orders" data-tooltip="Collection"><i class="fa-solid fa-car-side"></i><span>Collection</span></a>
+      <a href="add-order.html" class="nav-item" data-section="add-order" data-tooltip="Add Order"><i class="fa-solid fa-circle-plus"></i><span>Add Order</span></a>
+      <a href="catalog.html" class="nav-item" data-section="catalog" data-tooltip="Catalog"><i class="fa-solid fa-shop"></i><span>Catalog</span></a>
+      <a href="brands.html" class="nav-item" data-section="brands" data-tooltip="Brands"><i class="fa-solid fa-building"></i><span>Brands</span></a>
+      <a href="sellers.html" class="nav-item" data-section="sellers" data-tooltip="Sellers"><i class="fa-solid fa-store"></i><span>Sellers</span></a>
+      <a href="calendar.html" class="nav-item" data-section="calendar" data-tooltip="Calendar"><i class="fa-solid fa-calendar-days"></i><span>Calendar</span></a>
+      <a href="upcoming.html" class="nav-item" data-section="upcoming" data-tooltip="Upcoming"><i class="fa-solid fa-truck-fast"></i><span>Upcoming</span></a>
       <div class="nav-group-label">REPORTS</div>
-      <a href="analytics.html" class="nav-item" data-page="analytics" data-tooltip="Analytics"><i class="fa-solid fa-chart-area"></i><span>Analytics</span></a>
+      <a href="analytics.html" class="nav-item active" data-section="analytics" data-tooltip="Analytics"><i class="fa-solid fa-chart-area"></i><span>Analytics</span></a>
       <div class="nav-group-label">SYSTEM</div>
-      <a href="payments.html" class="nav-item" data-page="payments" data-tooltip="Payments"><i class="fa-solid fa-wallet"></i><span>Payments</span></a>
-      <a href="users.html" class="nav-item admin-only" data-page="users" data-tooltip="Users"><i class="fa-solid fa-users-gear"></i><span>Users</span></a>
-      <a href="access-requests.html" class="nav-item admin-only" data-page="access-requests" data-tooltip="Access Requests" style="display:none"><i class="fa-solid fa-user-clock"></i><span>Access Requests</span><span class="nav-badge" id="accessRequestsBadge" style="display:none"></span></a>
-      <a href="settings.html" class="nav-item" data-page="settings" data-tooltip="Settings"><i class="fa-solid fa-sliders"></i><span>Settings</span></a>
-      <a href="profile.html" class="nav-item" data-page="profile" data-tooltip="Profile"><i class="fa-solid fa-circle-user"></i><span>Profile</span></a>
+      <a href="payments.html" class="nav-item" data-section="payments" data-tooltip="Payments"><i class="fa-solid fa-wallet"></i><span>Payments</span></a>
+      <a href="users.html" class="nav-item admin-only" data-section="users" data-tooltip="Users" style="display:none"><i class="fa-solid fa-users-gear"></i><span>Users</span></a>
+      <a href="access-requests.html" class="nav-item admin-only" data-section="access-requests" data-tooltip="Access Requests" style="display:none"><i class="fa-solid fa-user-clock"></i><span>Access Requests</span></a>
+      <a href="settings.html" class="nav-item" data-section="settings" data-tooltip="Settings"><i class="fa-solid fa-sliders"></i><span>Settings</span></a>
+      <a href="profile.html" class="nav-item" data-section="profile" data-tooltip="Profile"><i class="fa-solid fa-circle-user"></i><span>Profile</span></a>
     </nav>
     <div class="sidebar-footer">
       <button class="nav-item logout-btn" id="logoutBtn" data-tooltip="Logout">
@@ -53,24 +48,16 @@
       </button>
     </div>
   </aside>
-
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
-  <!-- ═══════════════ MAIN CONTENT ═══════════════ -->
   <div class="main-wrap" id="mainWrap">
-
-    <!-- TOPBAR -->
     <header class="topbar">
       <div class="topbar-left">
         <button class="sidebar-toggle" id="sidebarToggle"><i class="fa-solid fa-bars"></i></button>
-        <button class="gs-trigger" id="gsTrigger">
-          <i class="fa-solid fa-magnifying-glass"></i><span>Search everything...</span><kbd>/</kbd>
-        </button>
+        <button class="gs-trigger" id="gsTrigger"><i class="fa-solid fa-magnifying-glass"></i><span>Search everything...</span><kbd>/</kbd></button>
       </div>
       <div class="topbar-right" style="position:relative">
-        <button class="btn btn-primary topbar-add-btn" id="topbarAddBtn">
-          <i class="fa-solid fa-plus"></i> <span class="topbar-add-label">Add Order</span>
-        </button>
+        <button class="btn btn-primary topbar-add-btn" id="topbarAddBtn"><i class="fa-solid fa-plus"></i> <span class="topbar-add-label">Add Order</span></button>
         <div class="topbar-profile" id="topbarProfileBtn">
           <div class="topbar-avatar" id="topbarAvatar">
             <img id="topbarAvatarImg" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%" />
@@ -88,10 +75,7 @@
               <img id="topbarDdAvatarImg" src="" alt="" style="display:none;width:100%;height:100%;object-fit:cover;border-radius:50%" />
               <span id="topbarDdInitials"><i class="fa-solid fa-user"></i></span>
             </div>
-            <div>
-              <div class="topbar-dd-name" id="topbarDdName">Admin</div>
-              <div class="topbar-dd-email" id="topbarDdEmail">—</div>
-            </div>
+            <div><div class="topbar-dd-name" id="topbarDdName">Admin</div><div class="topbar-dd-email" id="topbarDdEmail">—</div></div>
           </div>
           <div class="topbar-dd-divider"></div>
           <button class="topbar-dd-item" id="ddGoProfile"><i class="fa-solid fa-circle-user"></i> My Profile</button>
@@ -101,43 +85,120 @@
         </div>
       </div>
     </header>
-
-    <!-- Global Search Overlay -->
     <div class="gs-overlay hidden" id="gsOverlay">
       <div class="gs-modal" id="gsModal">
-        <div class="gs-input-row">
-          <i class="fa-solid fa-magnifying-glass gs-icon"></i>
-          <input type="text" id="gsInput" class="gs-input" placeholder="Search models, brands, sellers..." autocomplete="off" spellcheck="false" />
-          <kbd class="gs-esc">Esc</kbd>
-        </div>
-        <div class="gs-body" id="gsBody"><div class="gs-empty"><i class="fa-solid fa-magnifying-glass"></i><span>Type to search your collection</span></div></div>
-        <div class="gs-footer">
-          <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
-          <span><kbd>↵</kbd> open</span>
-          <span><kbd>Esc</kbd> close</span>
-        </div>
+        <div class="gs-input-row"><i class="fa-solid fa-magnifying-glass gs-icon"></i><input type="text" id="gsInput" class="gs-input" placeholder="Search models, brands, sellers..." autocomplete="off" /><kbd class="gs-esc">Esc</kbd></div>
+        <div class="gs-body" id="gsBody"><div class="gs-empty"><i class="fa-solid fa-magnifying-glass"></i><span>Type to search</span></div></div>
+        <div class="gs-footer"><span><kbd>↑</kbd><kbd>↓</kbd></span><span><kbd>↵</kbd> open</span><span><kbd>Esc</kbd> close</span></div>
       </div>
     </div>
-
     <div class="toast-container" id="toastContainer"></div>
 
     <main class="page-content" id="pageContent">
-      <!-- Section content -->
       <section class="section active" id="section-analytics">
-        <!-- Populated by analytics.js -->
-        <div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i> Loading...</div>
+        <div class="section-header">
+          <div>
+            <h2 class="section-title">Analytics</h2>
+            <p class="section-sub">Deep dive into your collection data</p>
+          </div>
+        </div>
+
+        <!-- ROW 1: Hero stat cards -->
+        <div class="an-hero-row">
+          <div class="an-hero-card" style="--ac:#7c5cfc;--ab:rgba(124,92,252,0.12)">
+            <div class="an-hero-icon"><i class="fa-solid fa-indian-rupee-sign"></i></div>
+            <div class="an-hero-val" id="anTotalInvested">₹0</div>
+            <div class="an-hero-label">Total Invested</div>
+            <div class="an-hero-bar"><div class="an-hero-bar-fill" style="width:100%;background:var(--ac)"></div></div>
+          </div>
+          <div class="an-hero-card" style="--ac:#16a34a;--ab:rgba(22,163,74,0.12)">
+            <div class="an-hero-icon"><i class="fa-solid fa-circle-check"></i></div>
+            <div class="an-hero-val" id="anTotalPaid">₹0</div>
+            <div class="an-hero-label">Total Paid</div>
+            <div class="an-hero-bar"><div class="an-hero-bar-fill" id="anBarPaid" style="width:0%;background:#16a34a"></div></div>
+          </div>
+          <div class="an-hero-card" style="--ac:#f97316;--ab:rgba(249,115,22,0.12)">
+            <div class="an-hero-icon"><i class="fa-solid fa-hourglass-half"></i></div>
+            <div class="an-hero-val" id="anTotalDue">₹0</div>
+            <div class="an-hero-label">Total Due</div>
+            <div class="an-hero-bar"><div class="an-hero-bar-fill" id="anBarDue" style="width:0%;background:#f97316"></div></div>
+          </div>
+          <div class="an-hero-card" style="--ac:#0284c7;--ab:rgba(2,132,199,0.12)">
+            <div class="an-hero-icon"><i class="fa-solid fa-boxes-stacked"></i></div>
+            <div class="an-hero-val" id="anTotalUnits">0</div>
+            <div class="an-hero-label">Total Units</div>
+            <div class="an-hero-bar"><div class="an-hero-bar-fill" style="width:100%;background:#0284c7"></div></div>
+          </div>
+          <div class="an-hero-card" style="--ac:#ec4899;--ab:rgba(236,72,153,0.12)">
+            <div class="an-hero-icon"><i class="fa-solid fa-calculator"></i></div>
+            <div class="an-hero-val" id="anAvgPrice">₹0</div>
+            <div class="an-hero-label">Avg Unit Price</div>
+            <div class="an-hero-bar"><div class="an-hero-bar-fill" style="width:60%;background:#ec4899"></div></div>
+          </div>
+        </div>
+
+        <!-- ROW 2: Gauge + Status + Scale -->
+        <div class="an-row2">
+          <div class="widget glass an-gauge-card">
+            <div class="widget-header"><h3><i class="fa-solid fa-heart-pulse"></i> Payment Health</h3></div>
+            <div class="an-gauge-wrap">
+              <svg class="an-gauge-svg" viewBox="0 0 200 130">
+                <path d="M20,110 A90,90 0 0,1 180,110" fill="none" stroke="rgba(124,92,252,0.12)" stroke-width="18" stroke-linecap="round"/>
+                <path id="anGaugeFill" d="M20,110 A90,90 0 0,1 180,110" fill="none" stroke="url(#gaugeGrad)" stroke-width="18" stroke-linecap="round" stroke-dasharray="283" stroke-dashoffset="283" style="transition:stroke-dashoffset 1s ease"/>
+                <defs>
+                  <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+                    <stop offset="0%" style="stop-color:#ef4444"/>
+                    <stop offset="50%" style="stop-color:#f97316"/>
+                    <stop offset="100%" style="stop-color:#22c55e"/>
+                  </linearGradient>
+                </defs>
+                <text x="100" y="95" text-anchor="middle" font-size="28" font-weight="900" fill="var(--text-primary)" id="anGaugePct">0%</text>
+                <text x="100" y="113" text-anchor="middle" font-size="10" fill="var(--text-muted)">PAYMENT HEALTH</text>
+              </svg>
+              <div class="an-gauge-labels"><span style="color:#ef4444">0%</span><span style="color:#22c55e">100%</span></div>
+            </div>
+            <div class="an-gauge-stats" id="anGaugeStats"></div>
+          </div>
+          <div class="widget glass">
+            <div class="widget-header"><h3><i class="fa-solid fa-layer-group"></i> Order Status</h3></div>
+            <div id="anStatusBars" class="an-status-bars"></div>
+          </div>
+          <div class="widget glass">
+            <div class="widget-header"><h3><i class="fa-solid fa-ruler"></i> Scale Breakdown</h3></div>
+            <div id="anScaleBars" class="an-status-bars"></div>
+          </div>
+        </div>
+
+        <!-- ROW 3: Monthly spend chart -->
+        <div class="widget glass">
+          <div class="widget-header">
+            <h3><i class="fa-solid fa-chart-column"></i> Monthly Spend</h3>
+            <span class="widget-header-sub" id="anMonthlyTotal"></span>
+          </div>
+          <div class="an-monthly-chart" id="anMonthlyChart"></div>
+        </div>
+
+        <!-- ROW 4: Brand + Seller -->
+        <div class="an-row4">
+          <div class="widget glass">
+            <div class="widget-header"><h3><i class="fa-solid fa-ranking-star"></i> Brand Spend</h3></div>
+            <div id="anBrandBars" class="an-brand-bars"></div>
+          </div>
+          <div class="widget glass">
+            <div class="widget-header"><h3><i class="fa-solid fa-store"></i> Top Sellers</h3></div>
+            <div id="anSellerBars" class="an-brand-bars"></div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
 
-  <script src="../../config/config.js"></script>
+
+
+    <script src="../../config/config.js"></script>
   <script type="module" src="../../assets/js/pages/analytics.js"></script>
   <script>
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/Diecast-Trackings/pwa/sw.js').catch(() => {});
-      });
-    }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/Diecast-Trackings/pwa/sw.js').catch(()=>{});
   </script>
 </body>
 </html>
