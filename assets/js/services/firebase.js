@@ -1,7 +1,7 @@
 /**
  * PreTrack — Firebase & Supabase Service
  * Reads config from window.__PRETRACK_CONFIG__ set by config/config.js
- * Supabase client is lazy-initialised only when image upload is needed.
+ * Supabase is lazy-initialised — only created when image upload is needed.
  */
 
 import { initializeApp }  from "https://www.gstatic.com/firebasejs/12.11.0/firebase-app.js";
@@ -11,7 +11,7 @@ import { getFirestore }   from "https://www.gstatic.com/firebasejs/12.11.0/fireb
 const _cfg = window.__PRETRACK_CONFIG__ || {};
 
 if (!_cfg.firebase?.apiKey) {
-  console.error('PreTrack: Firebase config missing. Check config/config.js is loaded and secrets are injected.');
+  console.error('PreTrack: Firebase config missing. Check config/config.js is loaded.');
 }
 
 const firebaseConfig = {
@@ -26,21 +26,20 @@ const firebaseConfig = {
 export const firebaseApp   = initializeApp(firebaseConfig);
 export const auth          = getAuth(firebaseApp);
 export const db            = getFirestore(firebaseApp);
-
 export const secondaryApp  = initializeApp(firebaseConfig, 'secondary');
 export const secondaryAuth = getAuth(secondaryApp);
 
 export const SUPER_ADMIN       = _cfg.superAdmin      || '';
-export const SUPABASE_URL      = _cfg.supabase?.url      || '';
-export const SUPABASE_ANON_KEY = _cfg.supabase?.anonKey  || '';
+export const SUPABASE_URL      = _cfg.supabase?.url   || '';
+export const SUPABASE_ANON_KEY = _cfg.supabase?.anonKey || '';
 export const SUPABASE_BUCKET   = 'order-images';
 
-/* ── Lazy Supabase client — only created when first needed ── */
+/* ── Lazy Supabase — only inits when image upload/delete is called ── */
 let _supabase = null;
 async function getSupabase() {
   if (_supabase) return _supabase;
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-    throw new Error('Supabase is not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to GitHub Secrets.');
+    throw new Error('Supabase not configured. Add SUPABASE_URL and SUPABASE_ANON_KEY to config/config.js');
   }
   const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm");
   _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
@@ -57,14 +56,15 @@ export async function uploadImageToSupabase(file) {
   return data.publicUrl;
 }
 
-export async function uploadAvatarToSupabase(file) {
+export async function uploadAvatarToSupabase(file, uid) {
   const client = await getSupabase();
   const ext    = file.name.split('.').pop() || 'jpg';
-  const path   = `avatars/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
-  const { error } = await client.storage.from(SUPABASE_BUCKET).upload(path, file, { cacheControl: '3600', upsert: false });
+  const path   = `avatars/${uid}.${ext}`;
+  await client.storage.from(SUPABASE_BUCKET).remove([path]);
+  const { error } = await client.storage.from(SUPABASE_BUCKET).upload(path, file, { cacheControl: '3600', upsert: true, contentType: file.type });
   if (error) throw new Error(`Avatar upload failed: ${error.message}`);
   const { data } = client.storage.from(SUPABASE_BUCKET).getPublicUrl(path);
-  return data.publicUrl;
+  return data.publicUrl + '?t=' + Date.now();
 }
 
 export async function deleteImageFromSupabase(imageUrl) {
