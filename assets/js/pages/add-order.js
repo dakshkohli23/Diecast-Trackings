@@ -6,17 +6,33 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 
 const _cfg = (typeof window !== 'undefined' && window.__PRETRACK_CONFIG__) || {};
 const firebaseConfig = {
-  apiKey: _cfg.firebase?.apiKey||'', authDomain: _cfg.firebase?.authDomain||'',
-  projectId: _cfg.firebase?.projectId||'', storageBucket: _cfg.firebase?.storageBucket||'',
-  messagingSenderId: _cfg.firebase?.messagingSenderId||'', appId: _cfg.firebase?.appId||'',
+  apiKey:            _cfg.firebase?.apiKey            || '',
+  authDomain:        _cfg.firebase?.authDomain        || '',
+  projectId:         _cfg.firebase?.projectId         || '',
+  storageBucket:     _cfg.firebase?.storageBucket     || '',
+  messagingSenderId: _cfg.firebase?.messagingSenderId || '',
+  appId:             _cfg.firebase?.appId             || '',
 };
-let _currentUser=null, _authReady=false;
-const app=initializeApp(firebaseConfig), auth=getAuth(app), db=getFirestore(app);
-const secondaryApp=initializeApp(firebaseConfig,'secondary'), secondaryAuth=getAuth(secondaryApp);
-const SUPER_ADMIN=_cfg.superAdmin||'dlaize@dlaize.com';
-const SUPABASE_URL=_cfg.supabase?.url||'', SUPABASE_ANON_KEY=_cfg.supabase?.anonKey||'', SUPABASE_BUCKET='order-images';
-let _supabase=null;
-function getSupabase(){if(_supabase)return _supabase;if(!SUPABASE_URL)throw new Error('Supabase not configured');_supabase=createClient(SUPABASE_URL,SUPABASE_ANON_KEY);return _supabase;}
+let _currentUser = null;
+const app           = initializeApp(firebaseConfig);
+const auth          = getAuth(app);
+const db            = getFirestore(app);
+const secondaryApp  = initializeApp(firebaseConfig, 'secondary');
+const secondaryAuth = getAuth(secondaryApp);
+
+const SUPER_ADMIN       = _cfg.superAdmin       || 'dlaize@dlaize.com';
+const SUPABASE_URL      = _cfg.supabase?.url    || '';
+const SUPABASE_ANON_KEY = _cfg.supabase?.anonKey || '';
+const SUPABASE_BUCKET   = 'order-images';
+let _supabase = null;
+function getSupabase() {
+  if (_supabase) return _supabase;
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('Supabase not configured in config/config.js');
+  _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return _supabase;
+}
+
+async function uploadImageToSupabase(file) {
   const ext  = file.name.split('.').pop() || 'jpg';
   const path = `orders/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
   const { error } = await getSupabase().storage.from(SUPABASE_BUCKET).upload(path, file, { cacheControl: '3600', upsert: false });
@@ -70,97 +86,6 @@ function rebuildAllBrandDropdowns(selectedVal) {
   rebuildDropdown(document.getElementById('fBrandSelect'), selectedVal);
   rebuildDropdown(document.getElementById('pBrandSelect'), selectedVal);
 }
-
-async function fetchData() {
-  // Warn if secrets not injected but continue anyway
-  if (firebaseConfig.apiKey.startsWith('__')) {
-    console.error('WARNING: Firebase credentials not injected by GitHub Actions.');
-  }
-
-  try {
-    const user = auth.currentUser;
-    if (!user) return;
-    const currentEmail = (user.email || '').toLowerCase().trim();
-    const isAdmin      = currentEmail === SUPER_ADMIN.toLowerCase().trim();
-
-    // Wrap each fetch individually — one failure won't kill everything
-    const safeGet = async (ref) => {
-      try { return await getDocs(ref); }
-      catch(e) { console.warn('Fetch failed:', e.code, e.message); return { docs: [] }; }
-    };
-
-    const [ordSnap, actSnap, brnSnap] = await Promise.all([
-      safeGet(collection(db, 'orders')),
-      safeGet(collection(db, 'activity')),
-      safeGet(collection(db, 'brands')),
-    ]);
-
-    const arsSnap = isAdmin ? await safeGet(collection(db, 'access_requests')) : { docs: [] };
-    const usrSnap = isAdmin ? await safeGet(collection(db, 'users'))           : { docs: [] };
-
-    DB.orders = ordSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-
-    // Fix incorrect totals in memory + Firestore silently
-    DB.orders.forEach(o => {
-      const unit    = (parseFloat(o.actual_price) > 0 ? parseFloat(o.actual_price) : parseFloat(o.preorder_price)) || 0;
-      const qty     = parseInt(o.quantity) || 1;
-      const ship    = parseFloat(o.shipping) || 0;
-      const paid    = parseFloat(o.paid) || 0;
-      const correct = (unit * qty) + ship;
-      const pend    = Math.max(0, correct - paid);
-      if (Math.abs((o.total||0) - correct) > 1) {
-        o.total   = correct;
-        o.pending = pend;
-        updateDoc(doc(db, 'orders', o.id), { total: correct, pending: pend })
-          .catch(e => console.warn('Fix order:', o.id, e.message));
-      }
-    });
-
-    DB.activity = actSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-
-    customBrands = brnSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .map(b => b.name)
-      .filter(Boolean);
-    rebuildAllBrandDropdowns();
-
-    DB.accessRequests = isAdmin
-      ? arsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
-      : [];
-
-    DB.users = isAdmin
-      ? usrSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
-      : [];
-
-    console.log(`fetchData: ${DB.orders.length} orders loaded`);
-    renderAll();
-
-  } catch(err) {
-    console.error('fetchData fatal error:', err);
-    DB = { orders: [], activity: [], accessRequests: [], users: [] };
-    renderAll();
-    showToast('Error loading data: ' + (err.code || err.message), 'warning');
-  }
-}
-
-async function addActivity(type, msg) {
-  const user = auth.currentUser;
-  try {
-    await addDoc(collection(db, 'activity'), {
-      type, msg, time: new Date().toLocaleString(),
-      createdAt:  serverTimestamp(),
-      ownerUid:   user?.uid   || '',
-      ownerEmail: user?.email || ''
-    });
-  } catch(e) { console.error('addActivity error:', e); }
-}
-
 function setText(id, val) { const el=document.getElementById(id); if(el) el.textContent=val; }
 function escHtml(str='')  { return String(str).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'); }
 function formatDate(s)    { if(!s) return '—'; const d=new Date(s); return isNaN(d)?s:d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}); }
@@ -241,6 +166,7 @@ function initGreeting() {
   checkSys();
 }
 
+/* ══════════════════════════════════════ HERO STATS ══════════════════════════════════════ */
 function updateHeroStats() {
   const fmt   = v => '₹' + Number(v||0).toLocaleString('en-IN');
   const today = new Date(); today.setHours(0,0,0,0);
@@ -265,6 +191,7 @@ function updateHeroStats() {
   else{if(hImg)hImg.style.display='none';if(hIni){hIni.style.display='flex';hIni.textContent=initials;}}
 }
 
+/* ══════════════════════════════════════ RENDER ALL ══════════════════════════════════════ */
 function renderAll() {
   renderStats();
   applyCollectionFilters();
@@ -300,6 +227,7 @@ function renderSettingsInfo() {
   if (emailEl && user) emailEl.textContent = user.email || '—';
 }
 
+/* ══════════════════════════════════════ PROFILE ══════════════════════════════════════ */
 function renderProfile() {
   const user    = auth.currentUser; if (!user) return;
   const orders  = DB.orders;
@@ -400,6 +328,7 @@ function syncTopbarAvatar() {
   setText('topbarDdEmail', user?.email || '—');
 }
 
+/* ══════════════════════════════════════ GLOBAL SEARCH ══════════════════════════════════════ */
 function initGlobalSearch() {
   const overlay  = document.getElementById('gsOverlay');
   const modal    = document.getElementById('gsModal');
@@ -478,6 +407,14 @@ function initGlobalSearch() {
   }
 
   function navigateTo(section) {
+    const pageMap = {
+      dashboard:'index.html', orders:'collection.html', 'add-order':'add-order.html',
+      catalog:'catalog.html', brands:'brands.html', sellers:'sellers.html',
+      calendar:'calendar.html', upcoming:'upcoming.html', analytics:'analytics.html',
+      payments:'payments.html', users:'users.html', 'access-requests':'access-requests.html',
+      settings:'settings.html', profile:'profile.html'
+    };
+    if (pageMap[section]) { window.location.href = pageMap[section]; return; }
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.querySelector(`.nav-item[data-section="${section}"]`)?.classList.add('active');
@@ -617,20 +554,14 @@ function initTopbarDropdown() {
     dropdown.classList.add('hidden');
     if (chevron) chevron.style.transform = '';
     // Navigate to profile section
-    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
-    document.querySelector('.nav-item[data-section="profile"]')?.classList.add('active');
-    document.getElementById('section-profile')?.classList.add('active');
+    window.location.href = 'profile.html';
     renderProfile();
   });
 
   document.getElementById('ddGoSettings')?.addEventListener('click', () => {
     dropdown.classList.add('hidden');
     if (chevron) chevron.style.transform = '';
-    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
-    document.querySelector('.nav-item[data-section="settings"]')?.classList.add('active');
-    document.getElementById('section-settings')?.classList.add('active');
+    window.location.href = 'settings.html';
   });
 
   document.getElementById('ddLogout')?.addEventListener('click', () => {
@@ -741,6 +672,7 @@ function initProfileSection() {
 
 
 /* ══════════════════════════════════════ STATS ══════════════════════════════════════ */
+async function ensureUserProfile(user) {
   try {
     const snap = await getDocs(query(collection(db, 'users'), where('email', '==', user.email)));
     if (snap.empty) {
@@ -756,51 +688,500 @@ function initProfileSection() {
 }
 
 /* ══════════════════════════════════════ INIT DASHBOARD ══════════════════════════════════════ */
-function initDashboard() {
+async function fetchData() {
+  // Warn if secrets not injected but continue anyway
+  if (firebaseConfig.apiKey.startsWith('__')) {
+    console.error('WARNING: Firebase credentials not injected by GitHub Actions.');
+  }
 
-function initSharedUI(){
-  const sidebar=document.getElementById('sidebar'),mainWrap=document.getElementById('mainWrap');
-  const sidebarToggle=document.getElementById('sidebarToggle'),sidebarOverlay=document.getElementById('sidebarOverlay');
-  const isMobile=()=>window.innerWidth<=900;
-  sidebarToggle?.addEventListener('click',()=>{
-    if(isMobile()){const o=sidebar.classList.contains('mobile-open');sidebar.classList.toggle('mobile-open',!o);sidebarOverlay?.classList.toggle('show',!o);document.body.style.overflow=o?'':'hidden';}
-    else{sidebar.classList.toggle('collapsed');mainWrap?.classList.toggle('expanded');}
+  try {
+    const user = auth.currentUser;
+    if (!user) return;
+    const currentEmail = (user.email || '').toLowerCase().trim();
+    const isAdmin      = currentEmail === SUPER_ADMIN.toLowerCase().trim();
+
+    // Wrap each fetch individually — one failure won't kill everything
+    const safeGet = async (ref) => {
+      try { return await getDocs(ref); }
+      catch(e) { console.warn('Fetch failed:', e.code, e.message); return { docs: [] }; }
+    };
+
+    const [ordSnap, actSnap, brnSnap] = await Promise.all([
+      safeGet(collection(db, 'orders')),
+      safeGet(collection(db, 'activity')),
+      safeGet(collection(db, 'brands')),
+    ]);
+
+    const arsSnap = isAdmin ? await safeGet(collection(db, 'access_requests')) : { docs: [] };
+    const usrSnap = isAdmin ? await safeGet(collection(db, 'users'))           : { docs: [] };
+
+    DB.orders = ordSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    // Fix incorrect totals in memory + Firestore silently
+    DB.orders.forEach(o => {
+      const unit    = (parseFloat(o.actual_price) > 0 ? parseFloat(o.actual_price) : parseFloat(o.preorder_price)) || 0;
+      const qty     = parseInt(o.quantity) || 1;
+      const ship    = parseFloat(o.shipping) || 0;
+      const paid    = parseFloat(o.paid) || 0;
+      const correct = (unit * qty) + ship;
+      const pend    = Math.max(0, correct - paid);
+      if (Math.abs((o.total||0) - correct) > 1) {
+        o.total   = correct;
+        o.pending = pend;
+        updateDoc(doc(db, 'orders', o.id), { total: correct, pending: pend })
+          .catch(e => console.warn('Fix order:', o.id, e.message));
+      }
+    });
+
+    DB.activity = actSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    customBrands = brnSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .map(b => b.name)
+      .filter(Boolean);
+    rebuildAllBrandDropdowns();
+
+    DB.accessRequests = isAdmin
+      ? arsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      : [];
+
+    DB.users = isAdmin
+      ? usrSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      : [];
+
+    console.log(`fetchData: ${DB.orders.length} orders loaded`);
+    renderAll();
+
+  } catch(err) {
+    console.error('fetchData fatal error:', err);
+    DB = { orders: [], activity: [], accessRequests: [], users: [] };
+    renderAll();
+    showToast('Error loading data: ' + (err.code || err.message), 'warning');
+  }
+}
+
+async function addActivity(type, msg) {
+  const user = auth.currentUser;
+  try {
+    await addDoc(collection(db, 'activity'), {
+      type, msg, time: new Date().toLocaleString(),
+      createdAt:  serverTimestamp(),
+      ownerUid:   user?.uid   || '',
+      ownerEmail: user?.email || ''
+    });
+  } catch(e) { console.error('addActivity error:', e); }
+}
+
+
+/* ══ SHARED UI — sidebar toggle, logout, nav links ══ */
+function initSharedUI() {
+  const sidebar        = document.getElementById('sidebar');
+  const mainWrap       = document.getElementById('mainWrap');
+  const sidebarToggle  = document.getElementById('sidebarToggle');
+  const sidebarOverlay = document.getElementById('sidebarOverlay');
+  const isMobile       = () => window.innerWidth <= 900;
+
+  sidebarToggle?.addEventListener('click', () => {
+    if (isMobile()) {
+      const isOpen = sidebar.classList.contains('mobile-open');
+      sidebar.classList.toggle('mobile-open', !isOpen);
+      sidebarOverlay?.classList.toggle('show', !isOpen);
+      document.body.style.overflow = isOpen ? '' : 'hidden';
+    } else {
+      sidebar.classList.toggle('collapsed');
+      mainWrap?.classList.toggle('expanded');
+    }
   });
-  sidebarOverlay?.addEventListener('click',()=>{sidebar.classList.remove('mobile-open');sidebarOverlay.classList.remove('show');document.body.style.overflow='';});
-  const logout=async()=>{try{await signOut(auth);window.location.href='../../login.html';}catch(e){showToast('Logout failed','warning');}};
-  document.getElementById('logoutBtn')?.addEventListener('click',logout);
-  document.getElementById('ddLogout')?.addEventListener('click',logout);
-  document.getElementById('topbarAddBtn')?.addEventListener('click',()=>{window.location.href='add-order.html';});
-  document.getElementById('ddGoProfile')?.addEventListener('click',()=>{window.location.href='profile.html';});
-  document.getElementById('ddGoSettings')?.addEventListener('click',()=>{window.location.href='settings.html';});
-  const isAdmin=auth.currentUser?.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
-  document.querySelectorAll('.admin-only').forEach(el=>el.style.display=isAdmin?'':'none');
+  sidebarOverlay?.addEventListener('click', () => {
+    sidebar.classList.remove('mobile-open');
+    sidebarOverlay?.classList.remove('show');
+    document.body.style.overflow = '';
+  });
+
+  const logout = async () => {
+    try { await signOut(auth); window.location.href = '../../login.html'; }
+    catch(e) { showToast('Logout failed', 'warning'); }
+  };
+  document.getElementById('logoutBtn')?.addEventListener('click', logout);
+  document.getElementById('ddLogout')?.addEventListener('click', logout);
+  document.getElementById('topbarAddBtn')?.addEventListener('click', () => { window.location.href = 'add-order.html'; });
+  document.getElementById('ddGoProfile')?.addEventListener('click',  () => { window.location.href = 'profile.html'; });
+  document.getElementById('ddGoSettings')?.addEventListener('click', () => { window.location.href = 'settings.html'; });
+
+  const isAdmin = auth.currentUser?.email?.toLowerCase() === SUPER_ADMIN.toLowerCase();
+  document.querySelectorAll('.admin-only').forEach(el => el.style.display = isAdmin ? '' : 'none');
+
   initTopbarDropdown();
   initGlobalSearch();
 }
 
-async function bootPage(onReady){
-  onAuthStateChanged(auth,async user=>{
-    if(!user){window.location.href='../../login.html';return;}
-    _currentUser=user;
-    const isSA=user.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
-    if(isSA){setText('profileName','Super Admin');setText('profileRole','Super Admin');}
-    else{
-      try{
-        const snap=await getDocs(query(collection(db,'users'),where('email','==',user.email)));
-        if(!snap.empty){
-          const d=snap.docs[0].data();
-          setText('profileName',d.name?.trim()||user.email);
-          const rm={super_admin:'Super Admin',admin:'Admin',editor:'Editor',viewer:'User'};
-          setText('profileRole',rm[d.role]||'User');
-        }else{setText('profileName',user.email);setText('profileRole','User');}
-      }catch(e){setText('profileName',user.email);}
+/* ══ AUTH BOOT ══ */
+async function bootPage(onReady) {
+  onAuthStateChanged(auth, async user => {
+    if (!user) { window.location.href = '../../login.html'; return; }
+    _currentUser = user;
+    const isSA = user.email?.toLowerCase() === SUPER_ADMIN.toLowerCase();
+    if (isSA) {
+      setText('profileName', 'Super Admin');
+      setText('profileRole', 'Super Admin');
+    } else {
+      try {
+        const snap = await getDocs(query(collection(db, 'users'), where('email', '==', user.email)));
+        if (!snap.empty) {
+          const d = snap.docs[0].data();
+          setText('profileName', d.name?.trim() || user.email);
+          const rm = { super_admin:'Super Admin', admin:'Admin', editor:'Editor', viewer:'User' };
+          setText('profileRole', rm[d.role] || 'User');
+        } else {
+          setText('profileName', user.email);
+          setText('profileRole', 'User');
+        }
+      } catch(e) { setText('profileName', user.email); }
     }
     await loadProfileFromFirestore();
     initSharedUI();
-    await onReady(user,isSA);
+    await onReady(user, isSA);
   });
 }
+function renderStats() {
+  const o = DB.orders, n = o.length;
+  const totalQty   = o.reduce((s,x) => s + (x.quantity||1), 0);
+  const investment = o.reduce((s,x) => s + ((x.actual_price||0)*(x.quantity||1)) + (x.shipping||0), 0);
+  const avgBuy     = totalQty > 0 ? Math.round(investment / totalQty) : 0;
+  const pendingAmt = o.reduce((s,x) => s + (x.pending||0), 0);
+  const pendingPO  = o.filter(x => x.status==='Ordered'||x.status==='In Transit').length;
+  const delivered  = o.filter(x => x.status==='Delivered').length;
+  const transit    = o.filter(x => x.status==='In Transit').length;
+  const overdue    = o.filter(x => x.eta && new Date(x.eta)<new Date() && x.status!=='Delivered' && x.status!=='Cancelled').length;
+  const bm = {}; o.forEach(x => { const k=(x.brand||x.vendor||'—').trim(); bm[k]=(bm[k]||0)+(x.quantity||1); });
+  const topBrand = Object.entries(bm).sort((a,b)=>b[1]-a[1])[0]?.[0] || '—';
+
+  setText('statTotal',      n);
+  setText('statQty',        totalQty);
+  setText('statAvgBuy',     avgBuy > 0 ? '₹'+avgBuy.toLocaleString('en-IN') : '₹0');
+  setText('statInvestment', '₹'+investment.toLocaleString('en-IN'));
+  setText('statPending',    '₹'+pendingAmt.toLocaleString('en-IN'));
+  setText('statPendingPO',  pendingPO);
+  setText('statDelivered',  delivered);
+  setText('statTransit',    transit);
+  setText('statOverdue',    overdue);
+  setText('statTopBrand',   topBrand);
+
+  const pct = x => n > 0 ? Math.min(100, Math.round((x/n)*100)) : 0;
+  const sb  = (id,v) => { const el=document.getElementById(id); if(el) el.style.width=v+'%'; };
+  sb('statDeliveredBar', pct(delivered));
+  sb('statTransitBar',   pct(transit));
+  sb('statPendingPOBar', pct(pendingPO));
+  sb('statOverdueBar',   pct(overdue));
+  sb('statPendingBar',   investment > 0 ? Math.min(100, Math.round((pendingAmt/investment)*100)) : 0);
+
+  const sellerCount = new Set(DB.orders.map(o => (o.vendor||'Unknown').trim())).size;
+  setText('statSellers', sellerCount);
+}
+
+/* ══════════════════════════════════════ FILTERS ══════════════════════════════════════ */
+function applyCollectionFilters() {
+  const q      = (document.getElementById('invSearch')?.value      || '').toLowerCase();
+  const brand  = document.getElementById('invFilterBrand')?.value  || '';
+  const status = document.getElementById('invFilterStatus')?.value || '';
+  const scale  = document.getElementById('invFilterScale')?.value  || '';
+  const sort   = document.getElementById('invSort')?.value         || 'newest';
+
+  let items = DB.orders.filter(o => {
+    const b = o.brand || o.vendor || '';
+    return (!q      || (o.product_name||'').toLowerCase().includes(q) || b.toLowerCase().includes(q) || (o.series||'').toLowerCase().includes(q))
+        && (!brand  || b === brand)
+        && (!status || o.status === status)
+        && (!scale  || o.scale  === scale);
+  });
+
+  if (sort === 'name-az')  items.sort((a,b) => (a.product_name||'').localeCompare(b.product_name||''));
+  if (sort === 'name-za')  items.sort((a,b) => (b.product_name||'').localeCompare(a.product_name||''));
+  if (sort === 'price-hi') items.sort((a,b) => (b.actual_price||0) - (a.actual_price||0));
+  if (sort === 'price-lo') items.sort((a,b) => (a.actual_price||0) - (b.actual_price||0));
+
+  renderTable(items);
+}
+
+function populateBrandFilter() {
+  const bf = document.getElementById('invFilterBrand'); if (!bf) return;
+  const cur    = bf.value;
+  const brands = [...new Set(DB.orders.map(o => o.brand || o.vendor).filter(Boolean))].sort();
+  bf.innerHTML = `<option value="">All Brands</option>` + brands.map(b => `<option value="${escHtml(b)}">${escHtml(b)}</option>`).join('');
+  bf.value = cur;
+}
+
+/* ══════════════════════════════════════ TABLE ══════════════════════════════════════ */
+function renderTable(orders) {
+  const tbody    = document.getElementById('ordersTableBody');
+  const gridView = document.getElementById('colGridView');
+  const countEl  = document.getElementById('colCount');
+
+  if (countEl) countEl.textContent = (orders?.length||0) + ' model' + ((orders?.length||0)===1?'':'s');
+
+  const empty = '<div class="empty-state"><i class="fa-solid fa-inbox"></i> No items found</div>';
+
+  if (!orders?.length) {
+    if (gridView) gridView.innerHTML = empty;
+    if (tbody)    tbody.innerHTML    = '<tr><td colspan="8" class="empty-row"><i class="fa-solid fa-inbox"></i> No items found</td></tr>';
+    return;
+  }
+
+  const fmt   = function(v) { return '\u20b9' + Number(v||0).toLocaleString('en-IN'); };
+  const today = new Date(); today.setHours(0,0,0,0);
+
+  // ── CARD GRID ──
+  if (gridView) {
+    gridView.innerHTML = orders.map(function(o) {
+      const sc    = (o.status||'').toLowerCase().replace(/\s+/g,'-');
+      const thumb = o.image
+        ? '<img src="' + escHtml(o.image) + '" alt="' + escHtml(o.product_name) + '" />'
+        : '<i class="fa-solid fa-car-side"></i>';
+      const isPaid    = (o.pending||0) <= 0;
+      const isPartial = !isPaid && (o.paid||0) > 0;
+
+      let etaHtml = '';
+      if (o.eta) {
+        const d = Math.ceil((new Date(o.eta) - today) / (1000*60*60*24));
+        var etaCls = '', etaLbl = '';
+        if (o.status==='Delivered')  { etaCls='';        etaLbl='Delivered'; }
+        else if (d < 0)              { etaCls='overdue'; etaLbl=Math.abs(d)+'d overdue'; }
+        else if (d === 0)            { etaCls='soon';    etaLbl='Today!'; }
+        else if (d <= 7)             { etaCls='soon';    etaLbl='in '+d+'d'; }
+        else                         { etaCls='';        etaLbl=formatDate(o.eta); }
+        etaHtml = '<div class="col-card-eta ' + etaCls + '"><i class="fa-solid fa-calendar-days"></i> ' + etaLbl + '</div>';
+      }
+
+      const pendingLabel = isPaid ? '\u2713 Paid' : (fmt(o.pending||0) + ' due');
+
+      return '<div class="col-card" onclick="viewOrder(\'' + o.id + '\')">'
+        + '<div class="col-card-img">' + thumb
+          + '<span class="col-card-badge"><span class="badge badge-' + sc + '" style="font-size:.58rem">' + escHtml(o.status||'Ordered') + '</span></span>'
+          + '<div class="col-card-actions" onclick="event.stopPropagation()">'
+            + '<button class="col-card-action-btn edit" onclick="editOrder(\'' + o.id + '\')" title="Edit"><i class="fa-solid fa-pen"></i></button>'
+            + '<button class="col-card-action-btn del" onclick="deleteOrder(\'' + o.id + '\')" title="Delete"><i class="fa-solid fa-trash"></i></button>'
+          + '</div>'
+        + '</div>'
+        + '<div class="col-card-body">'
+          + '<div class="col-card-name">' + escHtml(o.product_name) + '</div>'
+          + '<div class="col-card-meta">'
+            + '<span>' + escHtml(o.brand||o.vendor||'—') + '</span>'
+            + '<span class="col-card-meta-dot"></span>'
+            + '<span>' + escHtml(o.scale||'1:64') + '</span>'
+            + (o.variant ? '<span class="col-card-meta-dot"></span><span>' + escHtml(o.variant) + '</span>' : '')
+          + '</div>'
+          + etaHtml
+          + '<div class="col-card-footer">'
+            + '<span class="col-card-price">' + fmt(o.total||0) + '</span>'
+            + '<span class="col-card-pending ' + (isPaid?'paid':'due') + '">' + pendingLabel + '</span>'
+          + '</div>'
+        + '</div>'
+      + '</div>';
+    }).join('');
+  }
+
+  // ── LIST TABLE ──
+  if (tbody) {
+    tbody.innerHTML = orders.map(function(o) {
+      const sc    = (o.status||'').toLowerCase().replace(/\s+/g,'-');
+      const thumb = o.image
+        ? '<img src="' + escHtml(o.image) + '" alt="' + escHtml(o.product_name) + '" />'
+        : '<i class="fa-solid fa-car-side"></i>';
+      const pb = (o.pending||0)<=0 ? 'badge-paid' : ((o.paid||0)>0 ? 'badge-partial' : 'badge-pending-b');
+      const pl = (o.pending||0)<=0 ? 'Paid'       : ((o.paid||0)>0 ? 'Partial'       : 'Pending');
+      return '<tr>'
+        + '<td><div class="order-product-cell"><div class="order-thumb">' + thumb + '</div>'
+          + '<div style="min-width:0"><div class="order-product-name">' + escHtml(o.product_name) + '</div>'
+          + '<div style="font-size:.7rem;opacity:.6;white-space:nowrap">' + escHtml(o.scale||'1:64')
+          + (o.variant ? '<span class="variant-tag">' + escHtml(o.variant) + '</span>' : '')
+          + '</div></div></div></td>'
+        + '<td style="white-space:nowrap">' + escHtml(o.brand||o.vendor||'—') + '</td>'
+        + '<td><span class="badge badge-' + sc + '">' + escHtml(o.status||'Ordered') + '</span></td>'
+        + '<td style="text-align:center">' + (o.quantity||1) + '</td>'
+        + '<td style="white-space:nowrap"><strong>' + fmt(o.total||0) + '</strong></td>'
+        + '<td><span class="badge ' + pb + '" style="font-size:.68rem">' + pl + '</span></td>'
+        + '<td style="font-size:.76rem;color:var(--text-muted);white-space:nowrap">' + (o.eta ? formatDate(o.eta) : '—') + '</td>'
+        + '<td><div class="table-actions">'
+          + '<button class="btn btn-ghost btn-icon" onclick="viewOrder(\'' + o.id + '\')" title="View"><i class="fa-solid fa-eye"></i></button>'
+          + '<button class="btn btn-ghost btn-icon" onclick="editOrder(\'' + o.id + '\')" title="Edit"><i class="fa-solid fa-pen"></i></button>'
+          + '<button class="btn btn-ghost btn-icon" onclick="duplicateOrder(\'' + o.id + '\')" title="Duplicate"><i class="fa-solid fa-copy"></i></button>'
+          + '<button class="btn btn-danger btn-icon" onclick="deleteOrder(\'' + o.id + '\')" title="Delete"><i class="fa-solid fa-trash"></i></button>'
+        + '</div></td>'
+      + '</tr>';
+    }).join('');
+  }
+}
+function initCollectionViewToggle() {
+  const btnGrid = document.getElementById('viewBtnGrid');
+  const btnList = document.getElementById('viewBtnList');
+  const gridV   = document.getElementById('colGridView');
+  const listV   = document.getElementById('colListView');
+  if (!btnGrid || !btnList) return;
+  btnGrid.addEventListener('click', function() {
+    btnGrid.classList.add('active'); btnList.classList.remove('active');
+    gridV.style.display = ''; listV.style.display = 'none';
+  });
+  btnList.addEventListener('click', function() {
+    btnList.classList.add('active'); btnGrid.classList.remove('active');
+    listV.style.display = ''; gridV.style.display = 'none';
+  });
+}
+/* ══════════════════════════════════════ WIDGETS ══════════════════════════════════════ */
+/* ══════════════════════════════════════ THIS WEEK'S ARRIVALS ══════════════════════════════════════ */
+function renderWeekArrivals() {
+  const scrollEl = document.getElementById('insightScroll');
+  const subEl    = document.getElementById('insightSub');
+  if (!scrollEl) return;
+  const fmt  = v => '\u20b9' + Number(v||0).toLocaleString('en-IN');
+  const allO = DB.orders;
+  if (!allO.length) {
+    scrollEl.innerHTML = '<div style="color:var(--text-muted);font-size:.8rem;padding:.5rem 0">Add orders to see insights</div>';
+    if (subEl) subEl.textContent = 'No data yet';
+    return;
+  }
+  const today = new Date(); today.setHours(0,0,0,0);
+  const in7   = new Date(today); in7.setDate(today.getDate()+7);
+
+  const sellerMap = {};
+  allO.forEach(o=>{ const s=o.vendor||'Unknown'; sellerMap[s]=(sellerMap[s]||0)+(o.total||0); });
+  const topSeller = Object.entries(sellerMap).sort((a,b)=>b[1]-a[1])[0];
+
+  const delivered = allO.filter(o=>o.status==='Delivered'&&o.order_date&&o.eta);
+  const avgDays   = delivered.length ? Math.round(delivered.reduce((s,o)=>{
+    const d1=new Date(o.order_date),d2=new Date(o.eta);
+    return s+Math.max(0,Math.ceil((d2-d1)/(1000*60*60*24)));
+  },0)/delivered.length) : null;
+
+  const brandAvg={},brandCnt={};
+  allO.forEach(o=>{const b=o.brand||'Unknown';const u=(o.actual_price>0?o.actual_price:o.preorder_price)||0;if(!u)return;brandAvg[b]=(brandAvg[b]||0)+u;brandCnt[b]=(brandCnt[b]||0)+1;});
+  const bestValBrand = Object.entries(brandAvg).filter(([b])=>brandCnt[b]>=2).map(([b,t])=>([b,Math.round(t/brandCnt[b])])).sort((a,b)=>a[1]-b[1])[0];
+
+  const biggest      = allO.reduce((mx,o)=>(o.total||0)>(mx.total||0)?o:mx,allO[0]);
+  const totalInvested= allO.reduce((s,o)=>s+(o.total||0),0);
+  const totalPaid    = allO.reduce((s,o)=>s+(o.paid||0),0);
+  const payHealth    = totalInvested>0?Math.round((totalPaid/totalInvested)*100):0;
+
+  const carWords={};
+  allO.forEach(o=>{const name=(o.product_name||'').toUpperCase();['PORSCHE','BMW','NISSAN','FERRARI','LAMBORGHINI','MCLAREN','TOYOTA','MAZDA','HONDA','FORD','AUDI','SUPRA','RX7','GTR','GT3'].forEach(w=>{if(name.includes(w))carWords[w]=(carWords[w]||0)+1;});});
+  const topCar = Object.entries(carWords).sort((a,b)=>b[1]-a[1])[0];
+
+  const overdueOrders = allO.filter(o=>{if(!o.eta||o.status==='Delivered'||o.status==='Cancelled')return false;const d=new Date(o.eta);d.setHours(0,0,0,0);return d<today;}).sort((a,b)=>new Date(a.eta)-new Date(b.eta));
+
+  const scaleMap={};
+  allO.forEach(o=>{const s=o.scale||'1:64';scaleMap[s]=(scaleMap[s]||0)+1;});
+  const topScale = Object.entries(scaleMap).sort((a,b)=>b[1]-a[1])[0];
+
+  const arrivals = allO.filter(o=>{if(!o.eta||o.status==='Delivered'||o.status==='Cancelled')return false;const d=new Date(o.eta);d.setHours(0,0,0,0);return d>=today&&d<=in7;}).sort((a,b)=>new Date(a.eta)-new Date(b.eta));
+
+  const cards=[];
+  if(topSeller){const pct=Math.min(100,Math.round((topSeller[1]/totalInvested)*100));cards.push({color:'#7c5cfc',icon:'fa-store',label:'Top Seller',val:topSeller[0],sub:fmt(topSeller[1])+' spent \xb7 '+pct+'% of total',bar:pct,barColor:'#7c5cfc'});}
+  if(avgDays!==null){const r=avgDays<=14?'Fast \ud83d\udfe2':avgDays<=30?'Avg \ud83d\udfe1':'Slow \ud83d\udd34';cards.push({color:'#0284c7',icon:'fa-clock',label:'Avg Delivery',val:avgDays+'d',sub:'From '+delivered.length+' orders \xb7 '+r,bar:Math.min(100,Math.round((avgDays/60)*100)),barColor:'#0284c7'});}
+  if(bestValBrand)cards.push({color:'#16a34a',icon:'fa-tag',label:'Best Value',val:bestValBrand[0],sub:'Avg '+fmt(bestValBrand[1])+' per model',bar:null});
+  cards.push({color:payHealth>=80?'#16a34a':payHealth>=50?'#f97316':'#ef4444',icon:'fa-heart-pulse',label:'Pay Health',val:payHealth+'%',sub:fmt(totalPaid)+' paid of '+fmt(totalInvested),bar:payHealth,barColor:payHealth>=80?'#16a34a':payHealth>=50?'#f97316':'#ef4444'});
+  if(biggest)cards.push({color:'#ec4899',icon:'fa-trophy',label:'Biggest Order',val:fmt(biggest.total||0),sub:(biggest.product_name||'').substring(0,26)+((biggest.product_name||'').length>26?'\u2026':''),bar:null});
+  if(topCar)cards.push({color:'#f97316',icon:'fa-car-side',label:'Fav Car',val:topCar[0],sub:topCar[1]+' models',bar:null});
+  if(topScale){const p=Math.min(100,Math.round((topScale[1]/allO.length)*100));cards.push({color:'#6d28d9',icon:'fa-ruler',label:'Fav Scale',val:topScale[0],sub:topScale[1]+' models \xb7 '+p+'%',bar:p,barColor:'#6d28d9'});}
+  if(overdueOrders.length){const days=Math.abs(Math.ceil((new Date(overdueOrders[0].eta)-today)/(1000*60*60*24)));cards.push({color:'#ef4444',icon:'fa-triangle-exclamation',label:'Overdue',val:overdueOrders.length+' late',sub:'Oldest: '+days+'d \xb7 '+(overdueOrders[0].vendor||'').substring(0,16),bar:null});}
+  if(arrivals.length){cards.push({color:'#7c5cfc',icon:'fa-truck-fast',label:'This Week',val:arrivals.length+' arriving',sub:arrivals.slice(0,2).map(o=>(o.product_name||'').substring(0,18)).join(', '),bar:null});}
+
+  scrollEl.innerHTML = cards.map(card=>
+    '<div class="insight-card" style="border-top-color:'+card.color+'">'
+      +'<div style="display:flex;align-items:center;gap:.5rem">'
+        +'<div class="insight-card-icon" style="background:'+card.color+'22;color:'+card.color+'"><i class="fa-solid '+card.icon+'"></i></div>'
+        +'<span class="insight-card-label">'+card.label+'</span>'
+      +'</div>'
+      +'<div class="insight-card-val'+(String(card.val).length>9?' sm':'')+'">'+card.val+'</div>'
+      +'<div class="insight-card-sub">'+card.sub+'</div>'
+      +(card.bar!=null?'<div class="insight-card-bar-wrap"><div class="insight-card-bar" style="width:'+card.bar+'%;background:'+card.barColor+'"></div></div>':'')
+    +'</div>'
+  ).join('');
+  if(subEl) subEl.textContent = cards.length+' insights from '+allO.length+' models';
+}
+
+function renderRecentOrders() {
+  const c = document.getElementById('recentOrdersList'); if (!c) return;
+  const items = DB.orders.slice(0,10);
+  if (!items.length) { c.innerHTML=`<div class="empty-state">No orders yet</div>`; return; }
+  c.innerHTML = items.map(o => `
+    <div class="recent-order-item">
+      <div class="roi-thumb">${o.image?`<img src="${o.image}" alt="${escHtml(o.product_name)}" />`:`<i class="fa-solid fa-cube"></i>`}</div>
+      <div class="roi-info">
+        <div class="roi-name">${escHtml(o.product_name)}</div>
+        <div class="roi-meta">${escHtml(o.brand||o.vendor||'—')} • ${escHtml(o.scale||'1:64')}</div>
+      </div>
+      <div class="roi-status"><span class="badge badge-${(o.status||'').toLowerCase().replace(/\s+/g,'-')}">${escHtml(o.status||'Ordered')}</span></div>
+    </div>`).join('');
+}
+
+function renderEtaWidget() {
+  const c = document.getElementById('etaList'); if (!c) return;
+  const upcoming = DB.orders.filter(o=>o.eta&&o.status!=='Delivered'&&o.status!=='Owned').sort((a,b)=>new Date(a.eta)-new Date(b.eta)).slice(0,6);
+  if (!upcoming.length) { c.innerHTML=`<div class="empty-state">No upcoming deliveries</div>`; return; }
+  const today = new Date();
+  c.innerHTML = upcoming.map(o => {
+    const d  = Math.ceil((new Date(o.eta)-today)/(1000*60*60*24));
+    let dc = 'eta-chip-ok', dl = `${d}d`;
+    if (d < 0) { dc='eta-chip-overdue'; dl=`${Math.abs(d)}d overdue`; } else if (d <= 7) dc='eta-chip-soon';
+    return `<div class="delivery-item">
+      <div class="delivery-icon"><i class="fa-solid fa-truck"></i></div>
+      <div class="delivery-info">
+        <div class="delivery-name">${escHtml(o.product_name)}</div>
+        <div class="delivery-meta">${escHtml(o.brand||o.vendor||'—')} • ETA ${escHtml(o.eta)}</div>
+        <div class="delivery-chips">
+          <span class="delivery-chip eta-chip ${dc}"><i class="fa-solid fa-calendar-days"></i> ${dl}</span>
+          <span class="delivery-chip vendor-chip"><i class="fa-solid fa-store"></i> ${escHtml(o.brand||o.vendor||'—')}</span>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderActivityFeed() {
+  const c = document.getElementById('activityList'); if (!c) return;
+  const items = DB.activity.slice(0,12);
+  if (!items.length) { c.innerHTML=`<div class="empty-state">No recent activity</div>`; return; }
+  c.innerHTML = items.map(a => `
+    <div class="activity-item">
+      <span class="activity-dot ${escHtml(a.type||'info')}"></span>
+      <span>${escHtml(a.msg||'')}</span>
+      <span class="activity-time">${escHtml(a.time||'')}</span>
+    </div>`).join('');
+}
+
+function renderBrandLeaderboard() {
+  const c = document.getElementById('leaderboardList'); if (!c) return;
+  if (!DB.orders.length) { c.innerHTML=`<div class="empty-state">No data yet</div>`; return; }
+  const bm = {};
+  DB.orders.forEach(o => { const k=(o.brand||o.vendor||'Unknown').trim(); bm[k]=(bm[k]||0)+(o.quantity||1); });
+  const sorted = Object.entries(bm).sort((a,b)=>b[1]-a[1]).slice(0,8);
+  const ri = i => i===0?`<div class="lb-rank-icon gold"><i class="fa-solid fa-crown"></i></div>`
+                : i===1?`<div class="lb-rank-icon silver"><i class="fa-solid fa-medal"></i></div>`
+                : i===2?`<div class="lb-rank-icon bronze"><i class="fa-solid fa-award"></i></div>`
+                :        `<div class="lb-rank-icon"><i class="fa-solid fa-hashtag"></i></div>`;
+  c.innerHTML = sorted.map(([brand,qty],i) => `
+    <div class="lb-item">${ri(i)}
+      <div class="lb-info"><div class="lb-name">#${i+1} ${escHtml(brand)}</div><div class="lb-sub">${qty} unit${qty!==1?'s':''} tracked</div></div>
+      <span class="lb-count">${qty}</span>
+    </div>`).join('');
+}
+
+function renderAlerts() {
+  const c = document.getElementById('alertsPanel'); if (!c) return;
+  const alerts  = [];
+  const delayed = DB.orders.filter(o=>o.eta&&new Date(o.eta)<new Date()&&o.status!=='Delivered'&&o.status!=='Owned');
+  const unpaid  = DB.orders.filter(o=>(o.pending||0)>0);
+  if (delayed.length) alerts.push({ type:'warning', msg:`${delayed.length} delayed order(s)` });
+  if (unpaid.length)  alerts.push({ type:'danger',  msg:`${unpaid.length} order(s) with pending payment` });
+  if (!alerts.length) alerts.push({ type:'info',    msg:'All systems normal' });
+  c.innerHTML = alerts.map(a => `<div class="alert-item ${a.type}"><i class="fa-solid fa-circle-info"></i><span>${escHtml(a.msg)}</span></div>`).join('');
+}
+
 function initDashboard() {
   const sidebar        = document.getElementById('sidebar');
   const mainWrap       = document.getElementById('mainWrap');
@@ -846,6 +1227,14 @@ function initDashboard() {
 
   /* ── NAV ── */
   function navigateTo(section) {
+    const pageMap = {
+      dashboard:'index.html', orders:'collection.html', 'add-order':'add-order.html',
+      catalog:'catalog.html', brands:'brands.html', sellers:'sellers.html',
+      calendar:'calendar.html', upcoming:'upcoming.html', analytics:'analytics.html',
+      payments:'payments.html', users:'users.html', 'access-requests':'access-requests.html',
+      settings:'settings.html', profile:'profile.html'
+    };
+    if (pageMap[section]) { window.location.href = pageMap[section]; return; }
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.querySelector(`.nav-item[data-section="${section}"]`)?.classList.add('active');
@@ -1875,7 +2264,4 @@ window.deleteUser = window.removeUser; // ← alias: HTML that calls deleteUser(
 
 /* ══════════════════════════════════════ FIRESTORE ══════════════════════════════════════ */
 
-bootPage(async(user,isSA)=>{
-  await fetchData();
-  initDashboard();
-});
+bootPage(async(user,isSA)=>{ if(user.email!==SUPER_ADMIN)await ensureUserProfile(user); initDashboard(); await fetchData(); });

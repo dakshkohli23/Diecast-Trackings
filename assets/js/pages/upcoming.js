@@ -6,17 +6,33 @@ import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js
 
 const _cfg = (typeof window !== 'undefined' && window.__PRETRACK_CONFIG__) || {};
 const firebaseConfig = {
-  apiKey: _cfg.firebase?.apiKey||'', authDomain: _cfg.firebase?.authDomain||'',
-  projectId: _cfg.firebase?.projectId||'', storageBucket: _cfg.firebase?.storageBucket||'',
-  messagingSenderId: _cfg.firebase?.messagingSenderId||'', appId: _cfg.firebase?.appId||'',
+  apiKey:            _cfg.firebase?.apiKey            || '',
+  authDomain:        _cfg.firebase?.authDomain        || '',
+  projectId:         _cfg.firebase?.projectId         || '',
+  storageBucket:     _cfg.firebase?.storageBucket     || '',
+  messagingSenderId: _cfg.firebase?.messagingSenderId || '',
+  appId:             _cfg.firebase?.appId             || '',
 };
-let _currentUser=null, _authReady=false;
-const app=initializeApp(firebaseConfig), auth=getAuth(app), db=getFirestore(app);
-const secondaryApp=initializeApp(firebaseConfig,'secondary'), secondaryAuth=getAuth(secondaryApp);
-const SUPER_ADMIN=_cfg.superAdmin||'dlaize@dlaize.com';
-const SUPABASE_URL=_cfg.supabase?.url||'', SUPABASE_ANON_KEY=_cfg.supabase?.anonKey||'', SUPABASE_BUCKET='order-images';
-let _supabase=null;
-function getSupabase(){if(_supabase)return _supabase;if(!SUPABASE_URL)throw new Error('Supabase not configured');_supabase=createClient(SUPABASE_URL,SUPABASE_ANON_KEY);return _supabase;}
+let _currentUser = null;
+const app           = initializeApp(firebaseConfig);
+const auth          = getAuth(app);
+const db            = getFirestore(app);
+const secondaryApp  = initializeApp(firebaseConfig, 'secondary');
+const secondaryAuth = getAuth(secondaryApp);
+
+const SUPER_ADMIN       = _cfg.superAdmin       || 'dlaize@dlaize.com';
+const SUPABASE_URL      = _cfg.supabase?.url    || '';
+const SUPABASE_ANON_KEY = _cfg.supabase?.anonKey || '';
+const SUPABASE_BUCKET   = 'order-images';
+let _supabase = null;
+function getSupabase() {
+  if (_supabase) return _supabase;
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) throw new Error('Supabase not configured in config/config.js');
+  _supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  return _supabase;
+}
+
+async function uploadImageToSupabase(file) {
   const ext  = file.name.split('.').pop() || 'jpg';
   const path = `orders/${Date.now()}_${Math.random().toString(36).slice(2)}.${ext}`;
   const { error } = await getSupabase().storage.from(SUPABASE_BUCKET).upload(path, file, { cacheControl: '3600', upsert: false });
@@ -70,97 +86,6 @@ function rebuildAllBrandDropdowns(selectedVal) {
   rebuildDropdown(document.getElementById('fBrandSelect'), selectedVal);
   rebuildDropdown(document.getElementById('pBrandSelect'), selectedVal);
 }
-
-async function fetchData() {
-  // Warn if secrets not injected but continue anyway
-  if (firebaseConfig.apiKey.startsWith('__')) {
-    console.error('WARNING: Firebase credentials not injected by GitHub Actions.');
-  }
-
-  try {
-    const user = auth.currentUser;
-    if (!user) return;
-    const currentEmail = (user.email || '').toLowerCase().trim();
-    const isAdmin      = currentEmail === SUPER_ADMIN.toLowerCase().trim();
-
-    // Wrap each fetch individually — one failure won't kill everything
-    const safeGet = async (ref) => {
-      try { return await getDocs(ref); }
-      catch(e) { console.warn('Fetch failed:', e.code, e.message); return { docs: [] }; }
-    };
-
-    const [ordSnap, actSnap, brnSnap] = await Promise.all([
-      safeGet(collection(db, 'orders')),
-      safeGet(collection(db, 'activity')),
-      safeGet(collection(db, 'brands')),
-    ]);
-
-    const arsSnap = isAdmin ? await safeGet(collection(db, 'access_requests')) : { docs: [] };
-    const usrSnap = isAdmin ? await safeGet(collection(db, 'users'))           : { docs: [] };
-
-    DB.orders = ordSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-
-    // Fix incorrect totals in memory + Firestore silently
-    DB.orders.forEach(o => {
-      const unit    = (parseFloat(o.actual_price) > 0 ? parseFloat(o.actual_price) : parseFloat(o.preorder_price)) || 0;
-      const qty     = parseInt(o.quantity) || 1;
-      const ship    = parseFloat(o.shipping) || 0;
-      const paid    = parseFloat(o.paid) || 0;
-      const correct = (unit * qty) + ship;
-      const pend    = Math.max(0, correct - paid);
-      if (Math.abs((o.total||0) - correct) > 1) {
-        o.total   = correct;
-        o.pending = pend;
-        updateDoc(doc(db, 'orders', o.id), { total: correct, pending: pend })
-          .catch(e => console.warn('Fix order:', o.id, e.message));
-      }
-    });
-
-    DB.activity = actSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
-
-    customBrands = brnSnap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .map(b => b.name)
-      .filter(Boolean);
-    rebuildAllBrandDropdowns();
-
-    DB.accessRequests = isAdmin
-      ? arsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
-      : [];
-
-    DB.users = isAdmin
-      ? usrSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
-      : [];
-
-    console.log(`fetchData: ${DB.orders.length} orders loaded`);
-    renderAll();
-
-  } catch(err) {
-    console.error('fetchData fatal error:', err);
-    DB = { orders: [], activity: [], accessRequests: [], users: [] };
-    renderAll();
-    showToast('Error loading data: ' + (err.code || err.message), 'warning');
-  }
-}
-
-async function addActivity(type, msg) {
-  const user = auth.currentUser;
-  try {
-    await addDoc(collection(db, 'activity'), {
-      type, msg, time: new Date().toLocaleString(),
-      createdAt:  serverTimestamp(),
-      ownerUid:   user?.uid   || '',
-      ownerEmail: user?.email || ''
-    });
-  } catch(e) { console.error('addActivity error:', e); }
-}
-
 function setText(id, val) { const el=document.getElementById(id); if(el) el.textContent=val; }
 function escHtml(str='')  { return String(str).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;'); }
 function formatDate(s)    { if(!s) return '—'; const d=new Date(s); return isNaN(d)?s:d.toLocaleDateString('en-IN',{day:'2-digit',month:'short',year:'numeric'}); }
@@ -241,6 +166,7 @@ function initGreeting() {
   checkSys();
 }
 
+/* ══════════════════════════════════════ HERO STATS ══════════════════════════════════════ */
 function updateHeroStats() {
   const fmt   = v => '₹' + Number(v||0).toLocaleString('en-IN');
   const today = new Date(); today.setHours(0,0,0,0);
@@ -265,6 +191,7 @@ function updateHeroStats() {
   else{if(hImg)hImg.style.display='none';if(hIni){hIni.style.display='flex';hIni.textContent=initials;}}
 }
 
+/* ══════════════════════════════════════ RENDER ALL ══════════════════════════════════════ */
 function renderAll() {
   renderStats();
   applyCollectionFilters();
@@ -300,6 +227,7 @@ function renderSettingsInfo() {
   if (emailEl && user) emailEl.textContent = user.email || '—';
 }
 
+/* ══════════════════════════════════════ PROFILE ══════════════════════════════════════ */
 function renderProfile() {
   const user    = auth.currentUser; if (!user) return;
   const orders  = DB.orders;
@@ -400,6 +328,7 @@ function syncTopbarAvatar() {
   setText('topbarDdEmail', user?.email || '—');
 }
 
+/* ══════════════════════════════════════ GLOBAL SEARCH ══════════════════════════════════════ */
 function initGlobalSearch() {
   const overlay  = document.getElementById('gsOverlay');
   const modal    = document.getElementById('gsModal');
@@ -478,6 +407,14 @@ function initGlobalSearch() {
   }
 
   function navigateTo(section) {
+    const pageMap = {
+      dashboard:'index.html', orders:'collection.html', 'add-order':'add-order.html',
+      catalog:'catalog.html', brands:'brands.html', sellers:'sellers.html',
+      calendar:'calendar.html', upcoming:'upcoming.html', analytics:'analytics.html',
+      payments:'payments.html', users:'users.html', 'access-requests':'access-requests.html',
+      settings:'settings.html', profile:'profile.html'
+    };
+    if (pageMap[section]) { window.location.href = pageMap[section]; return; }
     document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
     document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
     document.querySelector(`.nav-item[data-section="${section}"]`)?.classList.add('active');
@@ -617,20 +554,14 @@ function initTopbarDropdown() {
     dropdown.classList.add('hidden');
     if (chevron) chevron.style.transform = '';
     // Navigate to profile section
-    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
-    document.querySelector('.nav-item[data-section="profile"]')?.classList.add('active');
-    document.getElementById('section-profile')?.classList.add('active');
+    window.location.href = 'profile.html';
     renderProfile();
   });
 
   document.getElementById('ddGoSettings')?.addEventListener('click', () => {
     dropdown.classList.add('hidden');
     if (chevron) chevron.style.transform = '';
-    document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
-    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
-    document.querySelector('.nav-item[data-section="settings"]')?.classList.add('active');
-    document.getElementById('section-settings')?.classList.add('active');
+    window.location.href = 'settings.html';
   });
 
   document.getElementById('ddLogout')?.addEventListener('click', () => {
@@ -741,6 +672,7 @@ function initProfileSection() {
 
 
 /* ══════════════════════════════════════ STATS ══════════════════════════════════════ */
+async function ensureUserProfile(user) {
   try {
     const snap = await getDocs(query(collection(db, 'users'), where('email', '==', user.email)));
     if (snap.empty) {
@@ -756,49 +688,165 @@ function initProfileSection() {
 }
 
 /* ══════════════════════════════════════ INIT DASHBOARD ══════════════════════════════════════ */
-function initDashboard() {
+async function fetchData() {
+  // Warn if secrets not injected but continue anyway
+  if (firebaseConfig.apiKey.startsWith('__')) {
+    console.error('WARNING: Firebase credentials not injected by GitHub Actions.');
+  }
 
-function initSharedUI(){
-  const sidebar=document.getElementById('sidebar'),mainWrap=document.getElementById('mainWrap');
-  const sidebarToggle=document.getElementById('sidebarToggle'),sidebarOverlay=document.getElementById('sidebarOverlay');
-  const isMobile=()=>window.innerWidth<=900;
-  sidebarToggle?.addEventListener('click',()=>{
-    if(isMobile()){const o=sidebar.classList.contains('mobile-open');sidebar.classList.toggle('mobile-open',!o);sidebarOverlay?.classList.toggle('show',!o);document.body.style.overflow=o?'':'hidden';}
-    else{sidebar.classList.toggle('collapsed');mainWrap?.classList.toggle('expanded');}
+  try {
+    const user = auth.currentUser;
+    if (!user) return;
+    const currentEmail = (user.email || '').toLowerCase().trim();
+    const isAdmin      = currentEmail === SUPER_ADMIN.toLowerCase().trim();
+
+    // Wrap each fetch individually — one failure won't kill everything
+    const safeGet = async (ref) => {
+      try { return await getDocs(ref); }
+      catch(e) { console.warn('Fetch failed:', e.code, e.message); return { docs: [] }; }
+    };
+
+    const [ordSnap, actSnap, brnSnap] = await Promise.all([
+      safeGet(collection(db, 'orders')),
+      safeGet(collection(db, 'activity')),
+      safeGet(collection(db, 'brands')),
+    ]);
+
+    const arsSnap = isAdmin ? await safeGet(collection(db, 'access_requests')) : { docs: [] };
+    const usrSnap = isAdmin ? await safeGet(collection(db, 'users'))           : { docs: [] };
+
+    DB.orders = ordSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    // Fix incorrect totals in memory + Firestore silently
+    DB.orders.forEach(o => {
+      const unit    = (parseFloat(o.actual_price) > 0 ? parseFloat(o.actual_price) : parseFloat(o.preorder_price)) || 0;
+      const qty     = parseInt(o.quantity) || 1;
+      const ship    = parseFloat(o.shipping) || 0;
+      const paid    = parseFloat(o.paid) || 0;
+      const correct = (unit * qty) + ship;
+      const pend    = Math.max(0, correct - paid);
+      if (Math.abs((o.total||0) - correct) > 1) {
+        o.total   = correct;
+        o.pending = pend;
+        updateDoc(doc(db, 'orders', o.id), { total: correct, pending: pend })
+          .catch(e => console.warn('Fix order:', o.id, e.message));
+      }
+    });
+
+    DB.activity = actSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+
+    customBrands = brnSnap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .map(b => b.name)
+      .filter(Boolean);
+    rebuildAllBrandDropdowns();
+
+    DB.accessRequests = isAdmin
+      ? arsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      : [];
+
+    DB.users = isAdmin
+      ? usrSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0))
+      : [];
+
+    console.log(`fetchData: ${DB.orders.length} orders loaded`);
+    renderAll();
+
+  } catch(err) {
+    console.error('fetchData fatal error:', err);
+    DB = { orders: [], activity: [], accessRequests: [], users: [] };
+    renderAll();
+    showToast('Error loading data: ' + (err.code || err.message), 'warning');
+  }
+}
+
+async function addActivity(type, msg) {
+  const user = auth.currentUser;
+  try {
+    await addDoc(collection(db, 'activity'), {
+      type, msg, time: new Date().toLocaleString(),
+      createdAt:  serverTimestamp(),
+      ownerUid:   user?.uid   || '',
+      ownerEmail: user?.email || ''
+    });
+  } catch(e) { console.error('addActivity error:', e); }
+}
+
+
+/* ══ SHARED UI — sidebar toggle, logout, nav links ══ */
+function initSharedUI() {
+  const sidebar        = document.getElementById('sidebar');
+  const mainWrap       = document.getElementById('mainWrap');
+  const sidebarToggle  = document.getElementById('sidebarToggle');
+  const sidebarOverlay = document.getElementById('sidebarOverlay');
+  const isMobile       = () => window.innerWidth <= 900;
+
+  sidebarToggle?.addEventListener('click', () => {
+    if (isMobile()) {
+      const isOpen = sidebar.classList.contains('mobile-open');
+      sidebar.classList.toggle('mobile-open', !isOpen);
+      sidebarOverlay?.classList.toggle('show', !isOpen);
+      document.body.style.overflow = isOpen ? '' : 'hidden';
+    } else {
+      sidebar.classList.toggle('collapsed');
+      mainWrap?.classList.toggle('expanded');
+    }
   });
-  sidebarOverlay?.addEventListener('click',()=>{sidebar.classList.remove('mobile-open');sidebarOverlay.classList.remove('show');document.body.style.overflow='';});
-  const logout=async()=>{try{await signOut(auth);window.location.href='../../login.html';}catch(e){showToast('Logout failed','warning');}};
-  document.getElementById('logoutBtn')?.addEventListener('click',logout);
-  document.getElementById('ddLogout')?.addEventListener('click',logout);
-  document.getElementById('topbarAddBtn')?.addEventListener('click',()=>{window.location.href='add-order.html';});
-  document.getElementById('ddGoProfile')?.addEventListener('click',()=>{window.location.href='profile.html';});
-  document.getElementById('ddGoSettings')?.addEventListener('click',()=>{window.location.href='settings.html';});
-  const isAdmin=auth.currentUser?.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
-  document.querySelectorAll('.admin-only').forEach(el=>el.style.display=isAdmin?'':'none');
+  sidebarOverlay?.addEventListener('click', () => {
+    sidebar.classList.remove('mobile-open');
+    sidebarOverlay?.classList.remove('show');
+    document.body.style.overflow = '';
+  });
+
+  const logout = async () => {
+    try { await signOut(auth); window.location.href = '../../login.html'; }
+    catch(e) { showToast('Logout failed', 'warning'); }
+  };
+  document.getElementById('logoutBtn')?.addEventListener('click', logout);
+  document.getElementById('ddLogout')?.addEventListener('click', logout);
+  document.getElementById('topbarAddBtn')?.addEventListener('click', () => { window.location.href = 'add-order.html'; });
+  document.getElementById('ddGoProfile')?.addEventListener('click',  () => { window.location.href = 'profile.html'; });
+  document.getElementById('ddGoSettings')?.addEventListener('click', () => { window.location.href = 'settings.html'; });
+
+  const isAdmin = auth.currentUser?.email?.toLowerCase() === SUPER_ADMIN.toLowerCase();
+  document.querySelectorAll('.admin-only').forEach(el => el.style.display = isAdmin ? '' : 'none');
+
   initTopbarDropdown();
   initGlobalSearch();
 }
 
-async function bootPage(onReady){
-  onAuthStateChanged(auth,async user=>{
-    if(!user){window.location.href='../../login.html';return;}
-    _currentUser=user;
-    const isSA=user.email?.toLowerCase()===SUPER_ADMIN.toLowerCase();
-    if(isSA){setText('profileName','Super Admin');setText('profileRole','Super Admin');}
-    else{
-      try{
-        const snap=await getDocs(query(collection(db,'users'),where('email','==',user.email)));
-        if(!snap.empty){
-          const d=snap.docs[0].data();
-          setText('profileName',d.name?.trim()||user.email);
-          const rm={super_admin:'Super Admin',admin:'Admin',editor:'Editor',viewer:'User'};
-          setText('profileRole',rm[d.role]||'User');
-        }else{setText('profileName',user.email);setText('profileRole','User');}
-      }catch(e){setText('profileName',user.email);}
+/* ══ AUTH BOOT ══ */
+async function bootPage(onReady) {
+  onAuthStateChanged(auth, async user => {
+    if (!user) { window.location.href = '../../login.html'; return; }
+    _currentUser = user;
+    const isSA = user.email?.toLowerCase() === SUPER_ADMIN.toLowerCase();
+    if (isSA) {
+      setText('profileName', 'Super Admin');
+      setText('profileRole', 'Super Admin');
+    } else {
+      try {
+        const snap = await getDocs(query(collection(db, 'users'), where('email', '==', user.email)));
+        if (!snap.empty) {
+          const d = snap.docs[0].data();
+          setText('profileName', d.name?.trim() || user.email);
+          const rm = { super_admin:'Super Admin', admin:'Admin', editor:'Editor', viewer:'User' };
+          setText('profileRole', rm[d.role] || 'User');
+        } else {
+          setText('profileName', user.email);
+          setText('profileRole', 'User');
+        }
+      } catch(e) { setText('profileName', user.email); }
     }
     await loadProfileFromFirestore();
     initSharedUI();
-    await onReady(user,isSA);
+    await onReady(user, isSA);
   });
 }
 function renderUpcoming() {
@@ -869,9 +917,5 @@ function renderUpcoming() {
   }).join('');
 }
 /* ══════════════════════════════════════ ETA CALENDAR ══════════════════════════════════════ */
-function renderCalendar() {
 
-bootPage(async(user,isSA)=>{
-  await fetchData();
-  renderUpcoming();
-});
+bootPage(async()=>{ await fetchData(); renderUpcoming(); });
